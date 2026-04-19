@@ -4366,65 +4366,272 @@ let redeemState = LS.get('redeemState', null);
 let adminCodes = LS.get('adminCodes', []);
 const ADMIN_PWD_HASH = 'nichuang_admin_2024'; // 管理员密码（实际做简单比对）
 
-// ===== 兑换码编码/解码（10位短码，码本法） =====
-// 码格式：N + 9位随机字符（大写字母+数字），共10位，如 N7K3M2XQAP
-// 完整配置存在本地码本 adminCodebook 中，玩家兑换时查码本
-const CODEBOOK_KEY = 'adminCodebook'; // localStorage key（不加ncc_前缀，直接存）
+// ===== 兑换码编码/解码（配置内嵌，玩家输入即可用） =====
+// 预设平台：url+model 用1位编号，大幅缩短码长
+const PRESET_PLATFORMS = [
+  {id:0, name:'DeepSeek',       url:'https://api.deepseek.com',                    model:'deepseek-chat'},
+  {id:1, name:'DeepSeek(R1)',   url:'https://api.deepseek.com',                    model:'deepseek-reasoner'},
+  {id:2, name:'OpenAI',         url:'https://api.openai.com/v1',                   model:'gpt-4o-mini'},
+  {id:3, name:'OpenAI(GPT4o)',  url:'https://api.openai.com/v1',                   model:'gpt-4o'},
+  {id:4, name:'通义千问',        url:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-turbo'},
+  {id:5, name:'智谱GLM',        url:'https://open.bigmodel.cn/api/paas/v4',        model:'glm-4-flash'},
+  {id:6, name:'月之暗面',        url:'https://api.moonshot.cn/v1',                  model:'moonshot-v1-8k'},
+  {id:7, name:'硅基流动',        url:'https://api.siliconflow.cn/v1',               model:'deepseek-ai/DeepSeek-V3'},
+  {id:8, name:'百炼',           url:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-plus'},
+  {id:9, name:'自定义',         url:'',                                            model:''},
+];
 
-function genShortCode(){
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉容易混淆的0/1/I/O
-  let code = 'N';
-  for(let i=0;i<9;i++) code += chars[Math.floor(Math.random()*chars.length)];
-  return code;
+// 查找匹配的预设平台编号
+function findPresetPlatform(url, model){
+  for(let i=0;i<PRESET_PLATFORMS.length-1;i++){
+    const p = PRESET_PLATFORMS[i];
+    if(p.url === url && p.model === model) return i;
+  }
+  return 9; // 自定义
+}
+
+// 紧凑二进制编码 → Base62（大小写+数字，比Base36更紧凑）
+// 码结构（预设平台）：
+//   [1字节=平台编号+hex标记] [1字节=key字节长度] [N字节=key] [2字节=回合数]
+// 码结构（自定义平台）：
+//   [1字节=0x89或9] [1字节=url长度] [N字节=url] [1字节=model长度] [N字节=model] [N字节=key] [2字节=回合数]
+// 前缀 NC
+
+const B62_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+function bytesToB62(bytes){
+  if(!bytes.length) return '0';
+  let num = 0n;
+  for(const b of bytes) num = num * 256n + BigInt(b);
+  let result = '';
+  while(num > 0n){
+    result = B62_CHARS[Number(num % 62n)] + result;
+    num = num / 62n;
+  }
+  return result || '0';
+}
+
+function b62ToBytes(str){
+  let num = 0n;
+  for(const c of str){
+    const idx = B62_CHARS.indexOf(c);
+    if(idx < 0) return null;
+    num = num * 62n + BigInt(idx);
+  }
+  const bytes = [];
+  while(num > 0n){
+    bytes.unshift(Number(num % 256n));
+    num = num / 256n;
+  }
+  return new Uint8Array(bytes);
+}
+
+// 提取apiKey核心部分（去掉常见前缀如 sk-）
+function stripKeyPrefix(key){
+  if(key.startsWith('sk-')) return key.slice(3);
+  return key;
+}
+
+// 检测是否为纯hex字符串
+function isHexString(s){
+  return /^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0;
+}
+
+// 将apiKey转为最紧凑的字节表示
+function keyToBytes(key){
+  const raw = stripKeyPrefix(key);
+  // 纯hex字符串 → 直接转bytes（省一半空间）
+  if(isHexString(raw)){
+    try{
+      const bytes = new Uint8Array(raw.length / 2);
+      for(let i=0;i<raw.length;i+=2){
+        bytes[i/2] = parseInt(raw.substring(i, i+2), 16);
+      }
+      return {bytes, isHex: true};
+    }catch(e){}
+  }
+  // 非hex → UTF-8编码
+  return {bytes: new TextEncoder().encode(raw), isHex: false};
+}
+
+// 从字节还原apiKey
+function keyFromBytes(bytes, isHex){
+  if(isHex){
+    // bytes → hex string → 加回 sk- 前缀
+    let hex = '';
+    for(const b of bytes) hex += b.toString(16).padStart(2, '0');
+    return 'sk-' + hex;
+  }
+  const raw = new TextDecoder().decode(bytes);
+  // 尝试恢复 sk- 前缀（DeepSeek/OpenAI的key去掉sk-后通常是hex或长字符串）
+  if(raw.length >= 20) return 'sk-' + raw;
+  return raw;
 }
 
 function encodeRedeemCode(data){
-  // data: {apiUrl, apiKey, model, turns}
-  // 生成唯一短码
-  let code;
-  const book = getCodebook();
-  do { code = genShortCode(); } while(book[code]); // 避免重复
-  // 写入码本
-  book[code] = data;
-  saveCodebook(book);
-  return code;
+  const platformId = findPresetPlatform(data.apiUrl, data.model);
+  const turns = Math.min(data.turns, 9999);
+  const {bytes: keyBytes, isHex} = keyToBytes(data.apiKey);
+  // 标记位：key是否为hex编码（用平台编号高位标记）
+  // 平台编号 0-8 → 正常, 0x80+平台编号 → hex key标记
+  const platformByte = isHex ? (platformId | 0x80) : platformId;
+
+  let payloadBytes;
+  if(platformId < 9){
+    // 预设平台：[平台1字节(hex标记)][key长度1字节][key][回合数2字节]
+    payloadBytes = new Uint8Array(1 + 1 + keyBytes.length + 2);
+    payloadBytes[0] = platformByte;
+    payloadBytes[1] = keyBytes.length;
+    payloadBytes.set(keyBytes, 2);
+    payloadBytes[payloadBytes.length - 2] = (turns >> 8) & 0xFF;
+    payloadBytes[payloadBytes.length - 1] = turns & 0xFF;
+  } else {
+    // 自定义平台：[9或0x89][url长度1字节][url][model长度1字节][model][key][回合数2字节]
+    const urlBytes = new TextEncoder().encode(data.apiUrl);
+    const modelBytes = new TextEncoder().encode(data.model || 'deepseek-chat');
+    if(urlBytes.length > 255 || modelBytes.length > 255){
+      return encodeRedeemCodeFallback(data);
+    }
+    payloadBytes = new Uint8Array(1 + 1 + urlBytes.length + 1 + modelBytes.length + keyBytes.length + 2);
+    let offset = 0;
+    payloadBytes[offset++] = isHex ? 0x89 : 9;
+    payloadBytes[offset++] = urlBytes.length;
+    payloadBytes.set(urlBytes, offset); offset += urlBytes.length;
+    payloadBytes[offset++] = modelBytes.length;
+    payloadBytes.set(modelBytes, offset); offset += modelBytes.length;
+    payloadBytes.set(keyBytes, offset); offset += keyBytes.length;
+    payloadBytes[offset++] = (turns >> 8) & 0xFF;
+    payloadBytes[offset++] = turns & 0xFF;
+  }
+
+  const encoded = bytesToB62(payloadBytes);
+  return 'NC' + encoded;
+}
+
+// 自定义平台超长时的fallback
+function encodeRedeemCodeFallback(data){
+  const payload = JSON.stringify({p:9, u:data.apiUrl, k:data.apiKey, m:data.model, t:Math.min(data.turns,9999)});
+  const bytes = new TextEncoder().encode(payload);
+  const encoded = bytesToB62(bytes);
+  return 'NC' + encoded;
 }
 
 function decodeRedeemCode(code){
   try{
+    const clean = code.trim().replace(/[-\s]/g, '');
+    if(!clean.toUpperCase().startsWith('NC')) return null;
+    const raw = clean.slice(2);
+    if(!raw) return null;
+
+    const bytes = b62ToBytes(raw);
+    if(!bytes || bytes.length < 4) return null;
+
+    const platformByte = bytes[0];
+    const isHex = (platformByte & 0x80) !== 0;
+    const platformId = platformByte & 0x7F;
+
+    if(platformId < 9){
+      // 预设平台格式
+      const keyLen = bytes[1];
+      if(bytes.length < 2 + keyLen + 2) return null;
+      const keyBytes = bytes.slice(2, 2 + keyLen);
+      const apiKey = keyFromBytes(keyBytes, isHex);
+      const turns = (bytes[2 + keyLen] << 8) | bytes[2 + keyLen + 1];
+      const platform = PRESET_PLATFORMS[platformId];
+      return {
+        apiUrl: platform.url,
+        apiKey: apiKey,
+        model: platform.model,
+        turns: turns
+      };
+    }
+
+    if(platformId === 9){
+      // 自定义平台格式
+      let offset = 1;
+      const urlLen = bytes[offset++];
+      if(bytes.length < offset + urlLen) return null;
+      const apiUrl = new TextDecoder().decode(bytes.slice(offset, offset + urlLen));
+      offset += urlLen;
+      const modelLen = bytes[offset++];
+      if(bytes.length < offset + modelLen) return null;
+      const model = new TextDecoder().decode(bytes.slice(offset, offset + modelLen));
+      offset += modelLen;
+      // 剩余字节：key + 2字节turns
+      if(bytes.length < offset + 3) return null;
+      const keyEnd = bytes.length - 2;
+      const keyBytes = bytes.slice(offset, keyEnd);
+      const apiKey = keyFromBytes(keyBytes, isHex);
+      const turns = (bytes[keyEnd] << 8) | bytes[keyEnd + 1];
+      return {
+        apiUrl,
+        apiKey,
+        model,
+        turns
+      };
+    }
+
+    // 未知格式，尝试 JSON fallback
+    return tryDecodeJsonFallback(bytes);
+  }catch(e){
+    return tryDecodeLegacyCode(code);
+  }
+}
+
+// JSON fallback解码
+function tryDecodeJsonFallback(bytes){
+  try{
+    const json = new TextDecoder().decode(bytes);
+    const obj = JSON.parse(json);
+    if(!obj || obj.k === undefined || obj.t === undefined) return null;
+    const platform = PRESET_PLATFORMS[obj.p] || PRESET_PLATFORMS[9];
+    return {
+      apiUrl: obj.p < 9 ? platform.url : (obj.u || ''),
+      apiKey: obj.k,
+      model: obj.p < 9 ? platform.model : (obj.m || 'deepseek-chat'),
+      turns: obj.t
+    };
+  }catch(e){ return null; }
+}
+
+// 兼容旧的码本格式和 Base64 格式
+function tryDecodeLegacyCode(code){
+  try{
     const clean = code.trim().toUpperCase();
-    // 先查本地码本
-    const book = getCodebook();
-    if(book[clean]) return book[clean];
-    // 兼容旧格式 Base64 长码
+    // 旧码本短码格式：N + 9位
+    if(/^N[A-HJ-NP-Z2-9]{9}$/.test(clean)){
+      const book = getCodebook();
+      if(book[clean]) return book[clean];
+    }
+    // 旧 Base64 长码
     if(clean.startsWith('NCC') && clean.length > 20){
       const raw = clean.slice(7);
       const json = decodeURIComponent(escape(atob(raw)));
       return JSON.parse(json);
     }
-    return null;
-  }catch(e){
-    return null;
-  }
+  }catch(e){}
+  return null;
 }
 
+// 保留码本功能（向后兼容）
+const CODEBOOK_KEY = 'adminCodebook';
 function getCodebook(){
   try{
     const v = localStorage.getItem(CODEBOOK_KEY);
     return v ? JSON.parse(v) : {};
   }catch(e){ return {}; }
 }
-
 function saveCodebook(book){
   try{ localStorage.setItem(CODEBOOK_KEY, JSON.stringify(book)); }catch(e){}
 }
 
-// 导出码本（给到玩家设备导入，实现跨设备兑换）
+// 导出码本（兼容旧码）
 function exportCodebook(){
   const book = getCodebook();
   const json = JSON.stringify(book);
+  if(Object.keys(book).length === 0){ toast('码本为空，无需导出'); return; }
   if(navigator.clipboard){
-    navigator.clipboard.writeText(json).then(()=>toast('✅ 码本已复制，发给玩家粘贴导入')).catch(()=>{
+    navigator.clipboard.writeText(json).then(()=>toast('✅ 码本已复制')).catch(()=>{
       showCodebookExportModal(json);
     });
   } else {
@@ -4442,7 +4649,7 @@ function showCodebookExportModal(json){
 
 function importCodebook(){
   showModal('📥 导入码本', `
-    <p style="font-size:0.78rem;color:var(--text2);margin-bottom:10px;">粘贴管理员发来的码本数据：</p>
+    <p style="font-size:0.78rem;color:var(--text2);margin-bottom:10px;">粘贴管理员发来的码本数据（仅兼容旧码本格式）：</p>
     <textarea class="input" id="cbImportText" rows="5" placeholder='{"N7K3M2XQAP":{...}}' style="font-size:0.7rem;font-family:monospace;"></textarea>
   `, ()=>{
     const raw = gv('cbImportText').trim();
@@ -4517,8 +4724,8 @@ function showRedeemModal(){
   showModal('🎫 兑换码', `
     <div style="margin-bottom:16px;">
       <label style="font-size:0.82rem;color:var(--text2);display:block;margin-bottom:8px;">输入兑换码</label>
-      <input type="text" class="input" id="rdm_code" placeholder="N7K3M2XQAP" style="font-family:monospace;font-size:0.88rem;letter-spacing:1px;text-transform:uppercase;" value="">
-      <p style="font-size:0.72rem;color:var(--text3);margin-top:6px;">填入10位兑换码（字母+数字），API将自动配置，每玩一回合消耗1次额度。</p>
+      <input type="text" class="input" id="rdm_code" placeholder="NCxxxxxxxxxx" style="font-family:monospace;font-size:0.82rem;letter-spacing:0.5px;" value="">
+      <p style="font-size:0.72rem;color:var(--text3);margin-top:6px;">填入兑换码后API自动配置，每玩一回合消耗1次额度。直接粘贴即可。</p>
     </div>
     ${isActivated ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;">
       ✅ 当前已激活 · 剩余 <strong style="color:var(--gold)">${redeemState.totalTurns - redeemState.usedTurns}</strong> 回合
@@ -4533,8 +4740,12 @@ function showRedeemModal(){
 // ===== 激活兑换码 =====
 function activateRedeemCode(code){
   const data = decodeRedeemCode(code);
-  if(!data || !data.apiUrl || !data.apiKey || !data.turns){
-    toast('⚠️ 无效的兑换码');
+  if(!data || !data.apiKey || !data.turns){
+    toast('⚠️ 无效的兑换码，请检查是否输入正确');
+    return;
+  }
+  if(!data.apiUrl){
+    toast('⚠️ 兑换码缺少API地址');
     return;
   }
 
@@ -4639,16 +4850,28 @@ function renderAdminPanel(){
     <div class="admin-panel">
       <h4>⚙️ API配置</h4>
       <div style="margin-bottom:10px;">
-        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API地址</label>
-        <input type="text" class="input" id="adm_url" value="${esc(savedApiUrl)}" placeholder="https://api.deepseek.com" style="font-size:0.82rem;">
+        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">平台选择</label>
+        <select class="input" id="adm_platform" onchange="onPlatformChange()" style="font-size:0.82rem;">
+          ${PRESET_PLATFORMS.map((p,i) => {
+            const matchId = findPresetPlatform(savedApiUrl, savedModel);
+            const isSel = (i === matchId) || (i === 0 && !savedApiUrl);
+            return `<option value="${i}"${isSel?' selected':''}>${p.name}${i<9?' ('+p.model+')':''}</option>`;
+          }).join('')}
+        </select>
       </div>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API密钥</label>
-        <input type="password" class="input" id="adm_key" value="${esc(savedApiKey)}" placeholder="sk-..." style="font-size:0.82rem;">
+      <div id="adm_custom_fields" style="display:${(findPresetPlatform(savedApiUrl,savedModel)===9 && savedApiUrl)?'block':'none'};">
+        <div style="margin-bottom:10px;">
+          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API地址</label>
+          <input type="text" class="input" id="adm_url" value="${esc(savedApiUrl)}" placeholder="https://api.deepseek.com" style="font-size:0.82rem;">
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">模型名称</label>
+          <input type="text" class="input" id="adm_model" value="${esc(savedModel)}" placeholder="deepseek-chat" style="font-size:0.82rem;">
+        </div>
       </div>
       <div style="margin-bottom:16px;">
-        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">模型名称</label>
-        <input type="text" class="input" id="adm_model" value="${esc(savedModel)}" placeholder="deepseek-chat" style="font-size:0.82rem;">
+        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API密钥</label>
+        <input type="password" class="input" id="adm_key" value="${esc(savedApiKey)}" placeholder="sk-..." style="font-size:0.82rem;">
       </div>
 
       <h4>🎫 生成兑换码</h4>
@@ -4680,7 +4903,8 @@ function renderAdminPanel(){
           <input type="number" class="input" id="adm_custom_count" placeholder="自定义数量" min="1" max="500" style="font-size:0.82rem;padding:8px 10px;">
         </div>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="generateRedeemCode()" style="width:100%;margin-bottom:14px;">✨ 批量生成兑换码</button>
+      <button class="btn btn-primary btn-sm" onclick="generateRedeemCode()" style="width:100%;margin-bottom:4px;">✨ 批量生成兑换码</button>
+      <p id="adm_code_hint" style="font-size:0.68rem;color:var(--text3);text-align:center;margin-bottom:14px;"></p>
 
       <div id="adm_batch_output" style="display:none;margin-bottom:14px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -4711,6 +4935,14 @@ function renderAdminPanel(){
   document.querySelector('#countSelector').dataset.selected = 1;
 }
 
+function onPlatformChange(){
+  const sel = document.getElementById('adm_platform');
+  const customFields = document.getElementById('adm_custom_fields');
+  if(!sel || !customFields) return;
+  const pid = parseInt(sel.value);
+  customFields.style.display = pid === 9 ? 'block' : 'none';
+}
+
 function selectTurns(btn, turns){
   document.querySelectorAll('#turnsSelector .turns-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
@@ -4730,13 +4962,20 @@ function selectCount(btn, count){
 let _lastBatchCodes = []; // 本次批量生成的码
 
 function generateRedeemCode(){
-  const apiUrl = gv('adm_url').trim();
   const apiKey = gv('adm_key').trim();
-  const model = gv('adm_model').trim() || 'deepseek-chat';
+  if(!apiKey){ toast('请填写API密钥'); return; }
 
-  if(!apiUrl || !apiKey){
-    toast('请填写API地址和密钥');
-    return;
+  // 读取平台配置
+  const pid = parseInt(document.getElementById('adm_platform')?.value ?? '0');
+  const platform = PRESET_PLATFORMS[pid] || PRESET_PLATFORMS[9];
+  let apiUrl, model;
+  if(pid < 9){
+    apiUrl = platform.url;
+    model = platform.model;
+  } else {
+    apiUrl = gv('adm_url').trim();
+    model = gv('adm_model').trim() || 'deepseek-chat';
+    if(!apiUrl){ toast('自定义平台需填写API地址'); return; }
   }
 
   // 读取回合数
@@ -4785,6 +5024,19 @@ function generateRedeemCode(){
 
   // 刷新历史列表
   refreshAdminCodeList();
+
+  // 码长提示
+  const hint = document.getElementById('adm_code_hint');
+  if(hint && _lastBatchCodes.length > 0){
+    const len = _lastBatchCodes[0].length;
+    const pid = parseInt(document.getElementById('adm_platform')?.value ?? '0');
+    if(pid < 9 && len <= 35){
+      hint.textContent = `码长${len}位 · 玩家粘贴即可用`;
+    } else {
+      hint.textContent = `码长${len}位 · 建议选用预设平台（DeepSeek等）可获更短兑换码`;
+    }
+  }
+
   toast(`✅ 已生成 ${count} 张兑换码，点击可单个复制`);
 }
 

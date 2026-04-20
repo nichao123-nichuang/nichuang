@@ -874,9 +874,62 @@ let userId = LS.get('userId', '');
 if(!userId){userId='u_'+Math.random().toString(36).substr(2,8);LS.set('userId',userId);}
 document.getElementById('userIdDisplay').textContent = userId;
 
-// 设置
+// 后端API配置
+const API_BASE = window.location.origin; // 同源后端
+
+// 会话状态（后端验证后的token）
+let sessionToken = LS.get('sessionToken', '');
+let sessionRemaining = -1; // -1=无限
+
+// 统一后端AI调用辅助函数
+async function callBackendAI(messages, maxTokens, temperature){
+  if(!sessionToken) throw new Error('请先输入兑换码');
+  const resp = await fetch(API_BASE + '/api/chat', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ sessionToken, messages, maxTokens:maxTokens||4096, temperature:temperature||0.85 }),
+    signal: AbortSignal.timeout(90000)
+  });
+  if(!resp.ok){
+    const errData = await resp.json().catch(()=>({}));
+    if(resp.status===401) throw new Error('会话已过期，请重新兑换');
+    if(resp.status===403) throw new Error('兑换码已用完');
+    throw new Error(errData.error || '请求失败('+resp.status+')');
+  }
+  const data = await resp.json();
+  if(data.remaining !== undefined){
+    sessionRemaining = data.remaining;
+    if(redeemState){
+      redeemState.usedTurns = redeemState.totalTurns - data.remaining;
+      LS.set('redeemState', redeemState);
+      renderRedeemStatus();
+      // 剩余回合数告警
+      if(data.remaining === 3) toast('⚠️ 兑换码还剩 3 回合');
+      if(data.remaining === 1) toast('⚠️ 兑换码仅剩最后 1 回合！');
+      if(data.remaining === 0){
+        setTimeout(()=>{
+          showModal('🎫 兑换码已用完', `
+            <p style="font-size:0.88rem;line-height:1.7;margin-bottom:16px;">你的兑换码回合数已全部用完，无法继续游戏。</p>
+            <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">请获取新的兑换码后继续冒险！</p>
+            <div style="display:flex;gap:10px;">
+              <button class="btn btn-ghost btn-sm" style="flex:1;" onclick="closeModal()">关闭</button>
+              <button class="btn btn-primary btn-sm" style="flex:1;" onclick="closeModal();switchPage('about');setTimeout(()=>showRedeemModal(),300)">🎫 输入新兑换码</button>
+            </div>
+          `, null, true);
+        }, 500);
+      }
+    }
+  }
+  return data.content || '';
+}
+
+// 检查是否有有效会话
+function hasActiveSession(){
+  return !!sessionToken;
+}
+
+// 设置（前端只保留外观/人设等非敏感配置）
 let settings = LS.get('settings', {
-  apiUrl:'', apiKey:'', model:'',
   theme:'dark', autoSave:true
 });
 
@@ -1359,7 +1412,7 @@ function showCreateScript(editId){
     const t=gv('ms_title').trim(), d=gv('ms_desc').trim();
     if(!t||!d){toast('请填写必填项');return false;}
     // 如果没有生成过attrConfig，先尝试自动生成
-    if(!_generatedAttrConfig && settings.apiUrl && settings.apiKey){
+    if(!_generatedAttrConfig && hasActiveSession()){
       toast('⏳ 正在自动生成匹配剧本的属性...');
       await generateScriptAttrs();
     }
@@ -1408,7 +1461,7 @@ function selectScriptTag(tag, el){
   // 选择类型后，如果已填写名称和简介，自动触发属性生成
   const title = gv('ms_title').trim();
   const desc = gv('ms_desc').trim();
-  if(title && desc && settings.apiUrl && settings.apiKey){
+  if(title && desc && hasActiveSession()){
     // 重置已生成属性，触发自动生成
     _generatedAttrConfig = null;
     autoGenerateAttrs();
@@ -1420,7 +1473,7 @@ function onDescBlur(){
   const title = gv('ms_title').trim();
   const desc = gv('ms_desc').trim();
   // 仅在未生成过属性、且条件满足时自动生成
-  if(!_generatedAttrConfig && title && desc && desc.length >= 10 && settings.apiUrl && settings.apiKey){
+  if(!_generatedAttrConfig && title && desc && desc.length >= 10 && hasActiveSession()){
     autoGenerateAttrs();
   }
 }
@@ -1448,7 +1501,7 @@ async function generateScriptAttrs(){
   const desc = gv('ms_desc').trim();
   const tag = gv('ms_tag').trim() || '冒险';
   if(!title||!desc){toast('请先填写剧本名称和简介');return;}
-  if(!settings.apiUrl||!settings.apiKey){toast('请先在设置中配置API');return;}
+  if(!hasActiveSession()){toast('请先在设置中配置API');return;}
 
   const btn = document.getElementById('btnGenAttrs');
   btn.textContent = '⏳ 生成中...'; btn.disabled = true;
@@ -1479,25 +1532,11 @@ async function generateScriptAttrs(){
 {"nameDefault":"符合世界观的默认名","headerIcon":"emoji","levelIcon":"emoji","attrs":[{"key":"eng","label":"中文","icon":"emoji","max":100,"init":45,"color":"#hex"},{"key":"gold","label":"金币","icon":"emoji","noMax":true,"init":10,"color":"#hex"},{"key":"rank","label":"等级","icon":"emoji","isText":true,"textDefault":"初始","color":"#hex"}],"skills":["符合世界观的技能1"]}`;
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    if(apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl += '/chat/completions';
-    const model = settings.model || 'deepseek-chat';
+    const aiText = await callBackendAI([
+      {role:'system',content:'你是游戏系统设计专家，擅长设计角色属性。只返回JSON。'},
+      {role:'user',content:prompt}
+    ], 1024, 0.8);
 
-    const resp = await fetch(apiUrl, {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({model,messages:[
-        {role:'system',content:'你是游戏系统设计专家，擅长设计角色属性。只返回JSON。'},
-        {role:'user',content:prompt}
-      ],stream:false,max_tokens:1024,temperature:0.8}),
-      signal: AbortSignal.timeout(60000)
-    });
-
-    if(!resp.ok){toast('API请求失败('+resp.status+')');btn.textContent='✨ 重新生成';btn.disabled=false;return;}
-
-    const data = await resp.json();
-    let aiText = data.choices?.[0]?.message?.content || data.response || '';
     const jsonMatch = aiText.match(/\{[\s\S]*\}/);
     if(!jsonMatch){toast('AI返回格式异常');btn.textContent='✨ 重新生成';btn.disabled=false;return;}
 
@@ -1561,7 +1600,7 @@ async function generateQuickActions(){
   const desc = gv('ms_desc').trim();
   const tag = gv('ms_tag').trim() || '冒险';
   if(!title||!desc){toast('请先填写剧本名称和简介');return;}
-  if(!settings.apiUrl||!settings.apiKey){toast('请先在设置中配置API');return;}
+  if(!hasActiveSession()){toast('请先在设置中配置API');return;}
 
   const btn = document.getElementById('btnGenQuick');
   btn.textContent = '⏳ 生成中...'; btn.disabled = true;
@@ -1592,25 +1631,11 @@ ${attrNames ? '【角色属性】' + attrNames : ''}
 ["操作1","操作2","操作3","操作4","操作5","操作6"]`;
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    if(apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl += '/chat/completions';
-    const model = settings.model || 'deepseek-chat';
+    const aiText = await callBackendAI([
+      {role:'system',content:'你是游戏系统设计专家，擅长设计游戏交互操作。只返回JSON数组。'},
+      {role:'user',content:prompt}
+    ], 512, 0.8);
 
-    const resp = await fetch(apiUrl, {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({model,messages:[
-        {role:'system',content:'你是游戏系统设计专家，擅长设计游戏交互操作。只返回JSON数组。'},
-        {role:'user',content:prompt}
-      ],stream:false,max_tokens:512,temperature:0.8}),
-      signal: AbortSignal.timeout(30000)
-    });
-
-    if(!resp.ok){toast('API请求失败('+resp.status+')');btn.textContent='🎲 AI生成操作';btn.disabled=false;return;}
-
-    const data = await resp.json();
-    let aiText = data.choices?.[0]?.message?.content || data.response || '';
     const jsonMatch = aiText.match(/\[[\s\S]*\]/);
     if(!jsonMatch){toast('AI返回格式异常');btn.textContent='🎲 AI生成操作';btn.disabled=false;return;}
 
@@ -1657,7 +1682,7 @@ function showCharCreate(scriptId){
   }
 
   // 检查API配置（兑换码激活过的不需要手动配）
-  if(!settings.apiUrl||!settings.apiKey){
+  if(!hasActiveSession()){
     // 没有兑换码也没有手动配置，先尝试提示兑换码入口
     showModal('⚙️ 需要配置API', `
       <p style="font-size:0.88rem;line-height:1.7;margin-bottom:16px;">请先配置API或使用兑换码后才能开始游戏。</p>
@@ -1781,7 +1806,7 @@ async function aiGenerateCharacter(){
   const script = getScriptById(_pendingScriptId);
   if(!script) return;
 
-  if(!settings.apiUrl||!settings.apiKey){toast('请先配置API');return;}
+  if(!hasActiveSession()){toast('请先配置API');return;}
 
   const name = gv('cc_name').trim();
   const gender = getCCGender();
@@ -1821,25 +1846,10 @@ ${gender?'性别：'+gender:'请自动选择性别'}
 4. 年龄要合理`;
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    if(apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl += '/chat/completions';
-
-    const resp = await fetch(apiUrl, {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({
-        model: settings.model || 'deepseek-chat',
-        messages:[{role:'system',content:'你只返回JSON，不要任何其他文字。'},{role:'user',content:prompt}],
-        stream:false, max_tokens:512, temperature:0.85
-      }),
-      signal: AbortSignal.timeout(30000)
-    });
-
-    if(!resp.ok){throw new Error('API错误('+resp.status+')');}
-
-    const data = await resp.json();
-    let aiText = data.choices?.[0]?.message?.content || data.response || '';
+    const aiText = await callBackendAI([
+      {role:'system',content:'你只返回JSON，不要任何其他文字。'},
+      {role:'user',content:prompt}
+    ], 512, 0.85);
 
     // 提取JSON
     const jsonMatch = aiText.match(/\{[\s\S]*\}/);
@@ -2254,7 +2264,6 @@ function buildContext(){
 async function callAI(userMsg, systemPrompt){
   isStreaming = true;
   const script = getScriptById(gameState.scriptId);
-  const model = settings.model || 'deepseek-chat';
 
   // 构建消息数组
   const messages = [
@@ -2263,44 +2272,46 @@ async function callAI(userMsg, systemPrompt){
   ];
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    // 智能URL处理
-    if(apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl += '/chat/completions';
-
-    const resp = await fetch(apiUrl, {
+    // 通过后端代理调用AI
+    const resp = await fetch(API_BASE + '/api/chat', {
       method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({model, messages, stream:false, max_tokens:4096, temperature:0.85}),
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        sessionToken,
+        messages,
+        max_tokens:4096,
+        temperature:0.85
+      }),
       signal: AbortSignal.timeout(90000)
     });
 
     removeTypingIndicator();
 
     if(!resp.ok){
-      const errText = await resp.text().catch(()=>'');
-      console.error('API error:', resp.status, errText);
-      // 400错误可能是模型名问题
-      if(resp.status===400){
-        addNarratorMsg('⚠️ API请求失败(400)。请检查API地址和模型名称是否正确。\n\n可在设置中调整，常用模型名：deepseek-chat、gpt-3.5-turbo、glm-4-flash');
+      const errData = await resp.json().catch(()=>({}));
+      console.error('API error:', resp.status, errData);
+      if(resp.status === 401){
+        addNarratorMsg('⚠️ 会话已过期，请重新输入兑换码。');
+      } else if(resp.status === 403){
+        addNarratorMsg('⚠️ 兑换码回合数已用完，请获取新的兑换码。');
       } else {
-        addNarratorMsg('⚠️ API请求失败('+resp.status+')。请检查网络和API配置。');
+        addNarratorMsg('⚠️ 请求失败('+resp.status+')：'+(errData.error||'请检查后端服务是否运行'));
       }
       isStreaming=false;
       return;
     }
 
     const data = await resp.json();
-    let aiText = '';
-    if(data.choices && data.choices[0]){
-      aiText = data.choices[0].message?.content || data.choices[0].text || '';
-    } else if(data.response){
-      aiText = data.response;
-    } else if(data.result){
-      aiText = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
-    }
-
+    const aiText = data.content || '';
     if(!aiText){addNarratorMsg('⚠️ AI返回了空内容');isStreaming=false;return;}
+
+    // 更新剩余回合
+    sessionRemaining = data.remaining;
+    if(redeemState && data.remaining !== undefined){
+      redeemState.usedTurns = redeemState.totalTurns - data.remaining;
+      LS.set('redeemState', redeemState);
+      renderRedeemStatus();
+    }
 
     // 保存消息
     gameState.messages.push({role:'user', content:userMsg.split('玩家输入：').pop()});
@@ -2309,12 +2320,25 @@ async function callAI(userMsg, systemPrompt){
     // 打字机效果
     await typewriterOutput(aiText);
 
-    // 消耗兑换码回合数（每次AI成功回复消耗1回合）
-    consumeRedeemTurn();
+    // 回合数告警
+    if(data.remaining === 3) toast('⚠️ 兑换码还剩 3 回合');
+    if(data.remaining === 1) toast('⚠️ 兑换码仅剩最后 1 回合！');
+    if(data.remaining === 0){
+      setTimeout(()=>{
+        showModal('🎫 兑换码已用完', `
+          <p style="font-size:0.88rem;line-height:1.7;margin-bottom:16px;">你的兑换码回合数已全部用完，无法继续游戏。</p>
+          <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">请获取新的兑换码后继续冒险！</p>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-ghost btn-sm" style="flex:1;" onclick="closeModal()">关闭</button>
+            <button class="btn btn-primary btn-sm" style="flex:1;" onclick="closeModal();switchPage('about');setTimeout(()=>showRedeemModal(),300)">🎫 输入新兑换码</button>
+          </div>
+        `, null, true);
+      }, 500);
+    }
   }catch(err){
     removeTypingIndicator();
     if(err.name==='TimeoutError'){
-      addNarratorMsg('⚠️ 请求超时，请检查API地址是否正确或网络是否通畅。');
+      addNarratorMsg('⚠️ 请求超时，请检查网络连接。');
     }else{
       console.error('API call error:', err);
       addNarratorMsg('⚠️ 连接失败：'+err.message);
@@ -2793,7 +2817,7 @@ function parseAndAddNPCs(text){
 let _npcGenQueue = [];
 let _npcGenerating = false;
 async function generateNPCDetails(npcs){
-  if(!settings.apiUrl||!settings.apiKey) {
+  if(!hasActiveSession()) {
     // 没有API配置，用简单默认值添加
     npcs.forEach(n=>{
       gameState.npcContacts.push({
@@ -2826,33 +2850,20 @@ async function generateNPCDetails(npcs){
 注意：rarity按重要性分配，路人N，普通R，重要SR，核心SSR`;
 
     try{
-      let apiUrl = settings.apiUrl.trim();
-      if(apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0,-1);
-      if(!apiUrl.endsWith('/chat/completions')) apiUrl += '/chat/completions';
-      const model = settings.model || 'deepseek-chat';
+      const aiText = await callBackendAI([
+        {role:'system',content:'你是游戏角色设计专家。只返回JSON数组。'},
+        {role:'user',content:prompt}
+      ], 512, 0.8);
 
-      const resp = await fetch(apiUrl, {
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-        body:JSON.stringify({model,messages:[
-          {role:'system',content:'你是游戏角色设计专家。只返回JSON数组。'},
-          {role:'user',content:prompt}
-        ],stream:false,max_tokens:512,temperature:0.8}),
-        signal: AbortSignal.timeout(15000)
-      });
-
-      if(resp.ok){
-        const data = await resp.json();
-        let aiText = data.choices?.[0]?.message?.content || data.response || '';
-        const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-        if(jsonMatch){
-          let npcList;
-          try{ npcList = JSON.parse(jsonMatch[0]); }catch(e){ npcList=null; }
-          if(Array.isArray(npcList)){
-            npcList.forEach(npc=>{
-              if(!gameState.npcContacts.some(n=>n.name===npc.name)){
-                gameState.npcContacts.push({
-                  name:npc.name||'未知',
+      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      if(jsonMatch){
+        let npcList;
+        try{ npcList = JSON.parse(jsonMatch[0]); }catch(e){ npcList=null; }
+        if(Array.isArray(npcList)){
+          npcList.forEach(npc=>{
+            if(!gameState.npcContacts.some(n=>n.name===npc.name)){
+              gameState.npcContacts.push({
+                name:npc.name||'未知',
                   emoji:npc.emoji||'👤',
                   desc:npc.desc||'',
                   relation:npc.relation||'',
@@ -2870,7 +2881,6 @@ async function generateNPCDetails(npcs){
             return;
           }
         }
-      }
     }catch(err){
       console.error('NPC detail gen error:', err);
     }
@@ -2900,7 +2910,7 @@ function updatePhoneBtnBadge(){
 // 打开手机NPC聊天
 function openPhoneChat(npcIdx){
   if(!gameState || !gameState.npcContacts[npcIdx]) return;
-  if(!settings.apiUrl||!settings.apiKey){toast('请先配置API');return;}
+  if(!hasActiveSession()){toast('请先配置API');return;}
 
   const npc = gameState.npcContacts[npcIdx];
   npc.hasNewMsg = false;
@@ -2965,34 +2975,15 @@ async function callPhoneChatAI(userMsg, systemPrompt){
   if(!state){isStreaming=false;return;}
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    if(apiUrl.endsWith('/')) apiUrl=apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl+='/chat/completions';
+    const text = await callBackendAI([
+      {role:'system',content:systemPrompt},
+      ...state.messages.slice(-10),
+      {role:'user',content:userMsg}
+    ], 200, 0.9);
 
-    const resp = await fetch(apiUrl,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({
-        model:settings.model||'deepseek-chat',
-        messages:[
-          {role:'system',content:systemPrompt},
-          ...state.messages.slice(-10),
-          {role:'user',content:userMsg}
-        ],
-        stream:false, max_tokens:200, temperature:0.9
-      }),
-      signal:AbortSignal.timeout(30000)
-    });
+    if(!text){addPhoneChatMsg('ai','...');isStreaming=false;return;}
 
     removePhoneTyping();
-    if(!resp.ok){
-      addPhoneChatMsg('ai','⚠️ 连接失败');
-      isStreaming=false;return;
-    }
-
-    const data=await resp.json();
-    let text = data.choices?.[0]?.message?.content || data.response || '';
-    if(!text){addPhoneChatMsg('ai','...');isStreaming=false;return;}
 
     state.messages.push({role:'user',content:userMsg});
     state.messages.push({role:'assistant',content:text});
@@ -3640,7 +3631,7 @@ function saveGame(){
 function loadGame(saveId){
   const save = saves.find(s=>s.id===saveId);
   if(!save){toast('存档不存在');return;}
-  if(!settings.apiUrl||!settings.apiKey){showSettings('请先配置API');return;}
+  if(!hasActiveSession()){showSettings('请先配置API');return;}
 
   const script = getScriptById(save.scriptId);
   if(!script){toast('剧本已不存在');return;}
@@ -3868,7 +3859,7 @@ function startCharChat(charId){
   closeModal();
   const ch = getAllChars().find(c=>c.id===charId);
   if(!ch) return;
-  if(!settings.apiUrl||!settings.apiKey){showSettings('请先配置API');return;}
+  if(!hasActiveSession()){showSettings('请先配置API');return;}
 
   document.getElementById('charChatScreen').style.display='flex';
   document.getElementById('charChatTitle').textContent=ch.name;
@@ -3909,33 +3900,13 @@ async function callCharAI(userMsg, systemPrompt){
   const state = window._charChatState;
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    if(apiUrl.endsWith('/')) apiUrl=apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl+='/chat/completions';
-
-    const resp = await fetch(apiUrl,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({
-        model:settings.model||'deepseek-chat',
-        messages:[
-          {role:'system',content:systemPrompt},
-          ...state.messages.slice(-10),
-          {role:'user',content:userMsg}
-        ],
-        stream:false, max_tokens:256, temperature:0.9
-      }),
-      signal:AbortSignal.timeout(60000)
-    });
+    const text = await callBackendAI([
+      {role:'system',content:systemPrompt},
+      ...state.messages.slice(-10),
+      {role:'user',content:userMsg}
+    ], 256, 0.9);
 
     removeCharTyping();
-    if(!resp.ok){
-      addCharMsg('AI','⚠️ 连接失败('+resp.status+')');
-      isStreaming=false;return;
-    }
-
-    const data=await resp.json();
-    let text = data.choices?.[0]?.message?.content || data.response || '';
     if(!text){addCharMsg('AI','⚠️ 空回复');isStreaming=false;return;}
 
     state.messages.push({role:'user',content:userMsg});
@@ -4058,7 +4029,7 @@ function startCall(charId){
   closeModal();
   const ch = getAllChars().find(c=>c.id===charId);
   if(!ch) return;
-  if(!settings.apiUrl||!settings.apiKey){ showSettings('请先配置API'); return; }
+  if(!hasActiveSession()){ showSettings('请先配置API'); return; }
 
   // 检查SpeechRecognition支持
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -4143,26 +4114,13 @@ async function callAIReply(userText){
   document.getElementById('callPttBtn').disabled = true;
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    if(apiUrl.endsWith('/')) apiUrl=apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl+='/chat/completions';
-
     const msgs = [
       {role:'system', content:callState.systemPrompt},
       ...callState.messages.slice(-12),
       {role:'user', content:userText}
     ];
 
-    const resp = await fetch(apiUrl,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({ model:settings.model||'deepseek-chat', messages:msgs, stream:false, max_tokens:120, temperature:0.95 }),
-      signal:AbortSignal.timeout(30000)
-    });
-
-    if(!resp.ok){ callReplyError('网络错误 '+resp.status); return; }
-    const data = await resp.json();
-    let text = data.choices?.[0]?.message?.content || '';
+    let text = await callBackendAI(msgs, 120, 0.95);
     if(!text){ callReplyError('空回复'); return; }
 
     // 清理多余标点
@@ -4573,7 +4531,7 @@ function selectRarity(btn,val){
 }
 
 async function generateRandomChar(){
-  if(!settings.apiUrl||!settings.apiKey){toast('请先在设置中配置API');return;}
+  if(!hasActiveSession()){toast('请先在设置中配置API');return;}
 
   const btn = document.getElementById('btnGenChar');
   btn.textContent = '⏳ 生成中...'; btn.disabled = true;
@@ -4594,25 +4552,11 @@ async function generateRandomChar(){
 {"name":"角色名","gender":"男或女","emoji":"一个emoji","rarity":"N或R或SR或SSR","tags":["标签1","标签2"],"desc":"角色外观和基本信息的描述（50-100字）","personality":"性格特征的详细描述（30-80字）","bg":"角色的过往经历和秘密，要有故事性（80-150字）"}`;
 
   try{
-    let apiUrl = settings.apiUrl.trim();
-    if(apiUrl.endsWith('/')) apiUrl = apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl += '/chat/completions';
-    const model = settings.model || 'deepseek-chat';
+    const aiText = await callBackendAI([
+      {role:'system',content:'你是角色设计专家，擅长创造有魅力的虚构角色。只返回JSON。'},
+      {role:'user',content:prompt}
+    ], 1024, 0.95);
 
-    const resp = await fetch(apiUrl, {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
-      body:JSON.stringify({model,messages:[
-        {role:'system',content:'你是角色设计专家，擅长创造有魅力的虚构角色。只返回JSON。'},
-        {role:'user',content:prompt}
-      ],stream:false,max_tokens:1024,temperature:0.95}),
-      signal: AbortSignal.timeout(30000)
-    });
-
-    if(!resp.ok){toast('API请求失败('+resp.status+')');btn.textContent='🎲 AI随机生成';btn.disabled=false;return;}
-
-    const data = await resp.json();
-    let aiText = data.choices?.[0]?.message?.content || data.response || '';
     const jsonMatch = aiText.match(/\{[\s\S]*\}/);
     if(!jsonMatch){toast('AI返回格式异常');btn.textContent='🎲 AI随机生成';btn.disabled=false;return;}
 
@@ -4801,29 +4745,19 @@ window.submitCommentFromDetail = function(){
 //  设置
 // ============================================================
 function showSettings(msg){
+  const sessionInfo = sessionToken ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
+    ✅ 已激活会话 · 剩余 <strong style="color:var(--gold)">${sessionRemaining < 0 ? '无限' : sessionRemaining}</strong> 回合
+  </div>` : `<div style="background:rgba(255,100,168,0.08);border:1px solid rgba(255,100,168,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
+    ⚠️ 尚未激活兑换码，请输入兑换码后开始游戏
+  </div>`;
+
   showModal('设置'+(msg?' - '+msg:''), `
     <div class="setting-group">
-      <h4>API 配置</h4>
-      <div class="setting-item">
-        <label>API 地址</label>
-        <input type="text" id="s_url" value="${esc(settings.apiUrl)}" placeholder="https://api.deepseek.com">
-      </div>
-      <div class="setting-item">
-        <label>API 密钥</label>
-        <input type="password" id="s_key" value="${esc(settings.apiKey)}" placeholder="sk-...">
-      </div>
-      <div class="setting-item">
-        <label>模型名称</label>
-        <input type="text" id="s_model" value="${esc(settings.model||'')}" placeholder="deepseek-chat">
-      </div>
-      <div style="margin-top:10px;">
-        <p style="font-size:0.72rem;color:var(--text3);line-height:1.6;">
-          常用配置：<br>
-          DeepSeek: api.deepseek.com + deepseek-chat<br>
-          OpenAI: api.openai.com + gpt-3.5-turbo<br>
-          GLM: open.bigmodel.cn/api/paas/v4 + glm-4-flash<br>
-          SiliconFlow: api.siliconflow.cn + Qwen/Qwen2.5-7B-Instruct
-        </p>
+      <h4>🎫 会话状态</h4>
+      ${sessionInfo}
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-primary" style="flex:1;" onclick="closeModal();showRedeemModal()">🎫 输入兑换码</button>
+        ${sessionToken ? `<button class="btn btn-sm btn-ghost" style="flex:1;" onclick="clearSession()">清除会话</button>` : ''}
       </div>
     </div>
     <div class="setting-group">
@@ -4866,11 +4800,8 @@ function showSettings(msg){
       </div>
     </div>
   `,()=>{
-    settings.apiUrl=gv('s_url').trim();
-    settings.apiKey=gv('s_key').trim();
-    settings.model=gv('s_model').trim();
     settings.theme=document.getElementById('s_theme').value;
-    settings.autoSave=document.querySelector('.toggle').classList.contains('on');
+    settings.autoSave=document.querySelector('.toggle')?.classList.contains('on') || true;
     myProfile.name=gv('s_name').trim();
     myProfile.gender=document.querySelector('.gender-btns:last-of-type .gender-btn.active')?.textContent||'';
     myProfile.desc=gv('s_desc').trim();
@@ -4881,22 +4812,33 @@ function showSettings(msg){
   });
 }
 
+// 清除会话
+function clearSession(){
+  sessionToken = '';
+  sessionRemaining = -1;
+  redeemState = null;
+  LS.del('sessionToken');
+  LS.del('redeemState');
+  renderRedeemStatus();
+  closeModal();
+  toast('会话已清除');
+}
+
 async function testAPI(){
-  const url=gv('s_url').trim(), key=gv('s_key').trim(), model=gv('s_model').trim();
-  if(!url||!key){toast('请填写API地址和密钥');return;}
+  if(!sessionToken){ toast('请先激活兑换码'); return; }
   toast('测试中...');
   try{
-    let apiUrl=url.trim();
-    if(apiUrl.endsWith('/')) apiUrl=apiUrl.slice(0,-1);
-    if(!apiUrl.endsWith('/chat/completions')) apiUrl+='/chat/completions';
-    const resp=await fetch(apiUrl,{
+    const resp = await fetch(API_BASE + '/api/chat', {
       method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      body:JSON.stringify({model:model||'deepseek-chat',messages:[{role:'user',content:'hi'}],max_tokens:5}),
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ sessionToken, messages:[{role:'user',content:'hi'}], maxTokens:5, temperature:0.5 }),
       signal:AbortSignal.timeout(15000)
     });
-    if(resp.ok){toast('✅ 连接成功！');}
-    else{const t=await resp.text();toast('❌ 失败('+resp.status+'): '+t.substring(0,100));}
+    if(resp.ok){ toast('✅ 连接成功！'); }
+    else{
+      const data = await resp.json().catch(()=>({}));
+      toast('❌ 失败('+resp.status+'): '+(data.error||'未知错误'));
+    }
   }catch(e){
     toast('❌ 连接失败: '+e.message);
   }
@@ -4907,418 +4849,13 @@ async function testAPI(){
 // ============================================================
 // 兑换码数据结构（存localStorage）
 // redeemState: { code, apiUrl, apiKey, model, totalTurns, usedTurns, activatedAt }
-// adminCodes: [{ code, apiUrl, apiKey, model, turns, createdAt }]
-let redeemState = LS.get('redeemState', null);
-let usedRedeemCodes = LS.get('usedRedeemCodes', []); // 已使用的兑换码列表（一次性）
-let adminCodes = LS.get('adminCodes', []);
-const ADMIN_PWD_HASH = 'nichuang_admin_2024'; // 管理员密码（实际做简单比对）
+// 兑换码系统 - 后端验证模式
+// 前端只存session token和显示状态，不存API密钥
+let redeemState = LS.get('redeemState', null); // { code, totalTurns, usedTurns, platformName }
 
-// ===== 兑换码编码/解码（配置内嵌，玩家输入即可用） =====
-// 预设平台：url+model 用1位编号，大幅缩短码长
-const PRESET_PLATFORMS = [
-  {id:0, name:'DeepSeek',       url:'https://api.deepseek.com',                    model:'deepseek-chat'},
-  {id:1, name:'DeepSeek(R1)',   url:'https://api.deepseek.com',                    model:'deepseek-reasoner'},
-  {id:2, name:'OpenAI',         url:'https://api.openai.com/v1',                   model:'gpt-4o-mini'},
-  {id:3, name:'OpenAI(GPT4o)',  url:'https://api.openai.com/v1',                   model:'gpt-4o'},
-  {id:4, name:'通义千问',        url:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-turbo'},
-  {id:5, name:'智谱GLM',        url:'https://open.bigmodel.cn/api/paas/v4',        model:'glm-4-flash'},
-  {id:6, name:'月之暗面',        url:'https://api.moonshot.cn/v1',                  model:'moonshot-v1-8k'},
-  {id:7, name:'硅基流动',        url:'https://api.siliconflow.cn/v1',               model:'deepseek-ai/DeepSeek-V3'},
-  {id:8, name:'百炼',           url:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-plus'},
-  {id:9, name:'自定义',         url:'',                                            model:''},
-];
-
-// 查找匹配的预设平台编号
-function findPresetPlatform(url, model){
-  for(let i=0;i<PRESET_PLATFORMS.length-1;i++){
-    const p = PRESET_PLATFORMS[i];
-    if(p.url === url && p.model === model) return i;
-  }
-  return 9; // 自定义
-}
-
-// 紧凑二进制编码 → Base62（大小写+数字，比Base36更紧凑）
-// 码结构 v2（前缀 NC2）：
-//   [payload] + [4字节nonce随机数] + [4字节签名(HMAC截断)]
-//   payload（预设平台）：[1字节=平台编号+hex标记] [1字节=key字节长度] [N字节=key] [2字节=回合数]
-//   payload（自定义平台）：[1字节=0x89或9] [1字节=url长度] [url] [1字节=model长度] [model] [key] [2字节=回合数]
-// 旧格式（前缀 NC）仍可解码，但无签名验证
-// nonce用途：每次生成保证唯一，同时作为已用码的全局唯一ID
-// 签名：SimpleHMAC(payload+nonce, ADMIN_PWD_HASH)的前4字节，防伪造
-
-// 管理员签名密钥（用于防止玩家伪造兑换码）
-const CODE_SIGN_KEY = 'nichuang_admin_2024';
-
-const B62_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-
-// ===== 简单签名（防伪造，非加密级别，但足够阻止普通玩家） =====
-// 对bytes做滚动哈希，输出4字节
-function simpleHash4(bytes, keyStr){
-  const keyBytes = new TextEncoder().encode(keyStr);
-  let h = [0x6B9B0A3D, 0x4F7C2E91, 0xD3A15B78, 0x2C84E06F];
-  for(let i = 0; i < bytes.length; i++){
-    const b = bytes[i] ^ keyBytes[i % keyBytes.length];
-    h[0] = ((h[0] << 5) | (h[0] >>> 27)) ^ (b * 0x9E3779B9 | 0);
-    h[1] = ((h[1] << 13) | (h[1] >>> 19)) ^ ((b + h[0]) | 0);
-    h[2] = ((h[2] << 7) | (h[2] >>> 25)) ^ ((h[1] ^ 0xBEEFCAFE) | 0);
-    h[3] = ((h[3] << 11) | (h[3] >>> 21)) ^ ((h[2] + b) | 0);
-  }
-  // 最终混合
-  h[0] = (h[0] ^ h[3] ^ 0xDEADBEEF) | 0;
-  h[1] = (h[1] ^ h[0] ^ 0xCAFEBABE) | 0;
-  h[2] = (h[2] ^ h[1] ^ 0xFACEB00C) | 0;
-  h[3] = (h[3] ^ h[2] ^ 0x0BADF00D) | 0;
-  return new Uint8Array([h[0] & 0xFF, h[1] & 0xFF, h[2] & 0xFF, h[3] & 0xFF]);
-}
-
-// 生成4字节随机nonce
-function randomNonce4(){
-  const arr = new Uint8Array(4);
-  crypto.getRandomValues(arr);
-  return arr;
-}
-
-// nonce转hex字符串（作为已用码ID）
-function nonceToHex(nonce4Bytes){
-  return Array.from(nonce4Bytes).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-function bytesToB62(bytes){
-  if(!bytes.length) return '0';
-  let num = 0n;
-  for(const b of bytes) num = num * 256n + BigInt(b);
-  let result = '';
-  while(num > 0n){
-    result = B62_CHARS[Number(num % 62n)] + result;
-    num = num / 62n;
-  }
-  return result || '0';
-}
-
-function b62ToBytes(str){
-  let num = 0n;
-  for(const c of str){
-    const idx = B62_CHARS.indexOf(c);
-    if(idx < 0) return null;
-    num = num * 62n + BigInt(idx);
-  }
-  const bytes = [];
-  while(num > 0n){
-    bytes.unshift(Number(num % 256n));
-    num = num / 256n;
-  }
-  return new Uint8Array(bytes);
-}
-
-// 提取apiKey核心部分（去掉常见前缀如 sk-）
-function stripKeyPrefix(key){
-  if(key.startsWith('sk-')) return key.slice(3);
-  return key;
-}
-
-// 检测是否为纯hex字符串
-function isHexString(s){
-  return /^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0;
-}
-
-// 将apiKey转为最紧凑的字节表示
-function keyToBytes(key){
-  const raw = stripKeyPrefix(key);
-  // 纯hex字符串 → 直接转bytes（省一半空间）
-  if(isHexString(raw)){
-    try{
-      const bytes = new Uint8Array(raw.length / 2);
-      for(let i=0;i<raw.length;i+=2){
-        bytes[i/2] = parseInt(raw.substring(i, i+2), 16);
-      }
-      return {bytes, isHex: true};
-    }catch(e){}
-  }
-  // 非hex → UTF-8编码
-  return {bytes: new TextEncoder().encode(raw), isHex: false};
-}
-
-// 从字节还原apiKey
-function keyFromBytes(bytes, isHex){
-  if(isHex){
-    // bytes → hex string → 加回 sk- 前缀
-    let hex = '';
-    for(const b of bytes) hex += b.toString(16).padStart(2, '0');
-    return 'sk-' + hex;
-  }
-  const raw = new TextDecoder().decode(bytes);
-  // 尝试恢复 sk- 前缀（DeepSeek/OpenAI的key去掉sk-后通常是hex或长字符串）
-  if(raw.length >= 20) return 'sk-' + raw;
-  return raw;
-}
-
-function encodeRedeemCode(data){
-  const platformId = findPresetPlatform(data.apiUrl, data.model);
-  const turns = Math.min(data.turns, 9999);
-  const {bytes: keyBytes, isHex} = keyToBytes(data.apiKey);
-  // 标记位：key是否为hex编码（用平台编号高位标记）
-  // 平台编号 0-8 → 正常, 0x80+平台编号 → hex key标记
-  const platformByte = isHex ? (platformId | 0x80) : platformId;
-
-  let payloadBytes;
-  if(platformId < 9){
-    // 预设平台：[平台1字节(hex标记)][key长度1字节][key][回合数2字节]
-    payloadBytes = new Uint8Array(1 + 1 + keyBytes.length + 2);
-    payloadBytes[0] = platformByte;
-    payloadBytes[1] = keyBytes.length;
-    payloadBytes.set(keyBytes, 2);
-    payloadBytes[payloadBytes.length - 2] = (turns >> 8) & 0xFF;
-    payloadBytes[payloadBytes.length - 1] = turns & 0xFF;
-  } else {
-    // 自定义平台：[9或0x89][url长度1字节][url][model长度1字节][model][key][回合数2字节]
-    const urlBytes = new TextEncoder().encode(data.apiUrl);
-    const modelBytes = new TextEncoder().encode(data.model || 'deepseek-chat');
-    if(urlBytes.length > 255 || modelBytes.length > 255){
-      return encodeRedeemCodeFallback(data);
-    }
-    payloadBytes = new Uint8Array(1 + 1 + urlBytes.length + 1 + modelBytes.length + keyBytes.length + 2);
-    let offset = 0;
-    payloadBytes[offset++] = isHex ? 0x89 : 9;
-    payloadBytes[offset++] = urlBytes.length;
-    payloadBytes.set(urlBytes, offset); offset += urlBytes.length;
-    payloadBytes[offset++] = modelBytes.length;
-    payloadBytes.set(modelBytes, offset); offset += modelBytes.length;
-    payloadBytes.set(keyBytes, offset); offset += keyBytes.length;
-    payloadBytes[offset++] = (turns >> 8) & 0xFF;
-    payloadBytes[offset++] = turns & 0xFF;
-  }
-
-  // v2: 在payload末尾加 4字节nonce + 4字节签名
-  // 注意：在整个finalBytes最前面加1字节版本标记(0xA2)，防止b62编码丢失前导0字节
-  const nonce = randomNonce4();
-  const payloadWithNonce = new Uint8Array(payloadBytes.length + 4);
-  payloadWithNonce.set(payloadBytes);
-  payloadWithNonce.set(nonce, payloadBytes.length);
-  const sig = simpleHash4(payloadWithNonce, CODE_SIGN_KEY);
-  // 组装：[0xA2版本字节][payload][nonce4][sig4]
-  const finalBytes = new Uint8Array(1 + payloadWithNonce.length + 4);
-  finalBytes[0] = 0xA2; // 版本标记，保证第一字节非0，防b62前导0丢失
-  finalBytes.set(payloadWithNonce, 1);
-  finalBytes.set(sig, 1 + payloadWithNonce.length);
-
-  const encoded = bytesToB62(finalBytes);
-  return 'NC2' + encoded; // v2 前缀，区分旧格式
-}
-
-// 自定义平台超长时的fallback
-function encodeRedeemCodeFallback(data){
-  const payload = JSON.stringify({p:9, u:data.apiUrl, k:data.apiKey, m:data.model, t:Math.min(data.turns,9999)});
-  const payloadBytes = new TextEncoder().encode(payload);
-  // 同样加nonce+签名，加0xA2前导字节防b62前导0丢失
-  const nonce = randomNonce4();
-  const payloadWithNonce = new Uint8Array(payloadBytes.length + 4);
-  payloadWithNonce.set(payloadBytes);
-  payloadWithNonce.set(nonce, payloadBytes.length);
-  const sig = simpleHash4(payloadWithNonce, CODE_SIGN_KEY);
-  const finalBytes = new Uint8Array(1 + payloadWithNonce.length + 4);
-  finalBytes[0] = 0xA2; // 版本标记
-  finalBytes.set(payloadWithNonce, 1);
-  finalBytes.set(sig, 1 + payloadWithNonce.length);
-  const encoded = bytesToB62(finalBytes);
-  return 'NC2' + encoded;
-}
-
-function decodeRedeemCode(code){
-  try{
-    const clean = code.trim().replace(/[-\s]/g, '');
-    const upper = clean.toUpperCase();
-
-    // v2格式：NC2前缀，带nonce+签名
-    if(upper.startsWith('NC2')){
-      const raw = clean.slice(3);
-      if(!raw) return null;
-      const allBytes = b62ToBytes(raw);
-      // 结构：[0xA2版本字节][payload][nonce4][sig4]，最少1+1+4+4=10字节
-      if(!allBytes || allBytes.length < 10) return null;
-      if(allBytes[0] !== 0xA2) return null; // 版本标记不符
-
-      // 去掉版本字节后拆分
-      const inner = allBytes.slice(1); // [payload][nonce4][sig4]
-      const sigOffset = inner.length - 4;
-      const nonceOffset = inner.length - 8;
-      const payloadWithNonce = inner.slice(0, sigOffset);
-      const noncePart = inner.slice(nonceOffset, sigOffset);
-      const sigExpected = inner.slice(sigOffset);
-
-      // 验签
-      const sigActual = simpleHash4(payloadWithNonce, CODE_SIGN_KEY);
-      if(sigActual[0] !== sigExpected[0] || sigActual[1] !== sigExpected[1] ||
-         sigActual[2] !== sigExpected[2] || sigActual[3] !== sigExpected[3]){
-        return null; // 签名不符，拒绝（伪造或篡改）
-      }
-
-      // payload 是 payloadWithNonce 去掉末尾4字节nonce
-      const bytes = inner.slice(0, nonceOffset);
-      const nonceId = nonceToHex(noncePart); // 唯一码ID
-      const result = decodePayloadBytes(bytes);
-      if(result) result.nonceId = nonceId;
-      return result;
-    }
-
-    // 旧格式：NC前缀，无签名（兼容）
-    if(upper.startsWith('NC')){
-      const raw = clean.slice(2);
-      if(!raw) return null;
-      const bytes = b62ToBytes(raw);
-      if(!bytes || bytes.length < 4) return null;
-      // 旧格式没有nonce，用码的base62字符串的哈希作为ID
-      const result = decodePayloadBytes(bytes);
-      if(result) result.nonceId = 'legacy_' + raw.substring(0, 8).toUpperCase();
-      return result;
-    }
-
-    return null;
-  }catch(e){
-    return tryDecodeLegacyCode(code);
-  }
-}
-
-// 解析payload字节（v1/v2共用）
-function decodePayloadBytes(bytes){
-  if(!bytes || bytes.length < 4) return null;
-
-  const platformByte = bytes[0];
-  const isHex = (platformByte & 0x80) !== 0;
-  const platformId = platformByte & 0x7F;
-
-  if(platformId < 9){
-    // 预设平台格式
-    const keyLen = bytes[1];
-    if(bytes.length < 2 + keyLen + 2) return null;
-    const keyBytes = bytes.slice(2, 2 + keyLen);
-    const apiKey = keyFromBytes(keyBytes, isHex);
-    const turns = (bytes[2 + keyLen] << 8) | bytes[2 + keyLen + 1];
-    const platform = PRESET_PLATFORMS[platformId];
-    return {
-      apiUrl: platform.url,
-      apiKey: apiKey,
-      model: platform.model,
-      turns: turns
-    };
-  }
-
-  if(platformId === 9){
-    // 自定义平台格式
-    let offset = 1;
-    const urlLen = bytes[offset++];
-    if(bytes.length < offset + urlLen) return null;
-    const apiUrl = new TextDecoder().decode(bytes.slice(offset, offset + urlLen));
-    offset += urlLen;
-    const modelLen = bytes[offset++];
-    if(bytes.length < offset + modelLen) return null;
-    const model = new TextDecoder().decode(bytes.slice(offset, offset + modelLen));
-    offset += modelLen;
-    // 剩余字节：key + 2字节turns
-    if(bytes.length < offset + 3) return null;
-    const keyEnd = bytes.length - 2;
-    const keyBytes = bytes.slice(offset, keyEnd);
-    const apiKey = keyFromBytes(keyBytes, isHex);
-    const turns = (bytes[keyEnd] << 8) | bytes[keyEnd + 1];
-    return {
-      apiUrl,
-      apiKey,
-      model,
-      turns
-    };
-  }
-
-  // 未知格式，尝试 JSON fallback
-  return tryDecodeJsonFallback(bytes);
-}
-
-// JSON fallback解码
-function tryDecodeJsonFallback(bytes){
-  try{
-    const json = new TextDecoder().decode(bytes);
-    const obj = JSON.parse(json);
-    if(!obj || obj.k === undefined || obj.t === undefined) return null;
-    const platform = PRESET_PLATFORMS[obj.p] || PRESET_PLATFORMS[9];
-    return {
-      apiUrl: obj.p < 9 ? platform.url : (obj.u || ''),
-      apiKey: obj.k,
-      model: obj.p < 9 ? platform.model : (obj.m || 'deepseek-chat'),
-      turns: obj.t
-    };
-  }catch(e){ return null; }
-}
-
-// 兼容旧的码本格式和 Base64 格式
-function tryDecodeLegacyCode(code){
-  try{
-    const clean = code.trim().toUpperCase();
-    // 旧码本短码格式：N + 9位
-    if(/^N[A-HJ-NP-Z2-9]{9}$/.test(clean)){
-      const book = getCodebook();
-      if(book[clean]) return book[clean];
-    }
-    // 旧 Base64 长码
-    if(clean.startsWith('NCC') && clean.length > 20){
-      const raw = clean.slice(7);
-      const json = decodeURIComponent(escape(atob(raw)));
-      return JSON.parse(json);
-    }
-  }catch(e){}
-  return null;
-}
-
-// 保留码本功能（向后兼容）
-const CODEBOOK_KEY = 'adminCodebook';
-function getCodebook(){
-  try{
-    const v = localStorage.getItem(CODEBOOK_KEY);
-    return v ? JSON.parse(v) : {};
-  }catch(e){ return {}; }
-}
-function saveCodebook(book){
-  try{ localStorage.setItem(CODEBOOK_KEY, JSON.stringify(book)); }catch(e){}
-}
-
-// 导出码本（兼容旧码）
-function exportCodebook(){
-  const book = getCodebook();
-  const json = JSON.stringify(book);
-  if(Object.keys(book).length === 0){ toast('码本为空，无需导出'); return; }
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(json).then(()=>toast('✅ 码本已复制')).catch(()=>{
-      showCodebookExportModal(json);
-    });
-  } else {
-    showCodebookExportModal(json);
-  }
-}
-
-function showCodebookExportModal(json){
-  showModal('📤 导出码本', `
-    <p style="font-size:0.78rem;color:var(--text2);margin-bottom:10px;">将以下内容发给玩家，让其在管理员页面选择"导入码本"。</p>
-    <textarea class="input" id="cbExportText" rows="5" readonly style="font-size:0.7rem;font-family:monospace;">${esc(json)}</textarea>
-    <button class="btn btn-sm btn-primary" style="width:100%;margin-top:10px;" onclick="selectText(document.getElementById('cbExportText'));toast('请手动复制')">全选复制</button>
-  `, null, true);
-}
-
-function importCodebook(){
-  showModal('📥 导入码本', `
-    <p style="font-size:0.78rem;color:var(--text2);margin-bottom:10px;">粘贴管理员发来的码本数据（仅兼容旧码本格式）：</p>
-    <textarea class="input" id="cbImportText" rows="5" placeholder='{"N7K3M2XQAP":{...}}' style="font-size:0.7rem;font-family:monospace;"></textarea>
-  `, ()=>{
-    const raw = gv('cbImportText').trim();
-    if(!raw){toast('请粘贴码本数据');return false;}
-    try{
-      const incoming = JSON.parse(raw);
-      const book = getCodebook();
-      Object.assign(book, incoming);
-      saveCodebook(book);
-      toast('✅ 码本导入成功，共 '+Object.keys(incoming).length+' 个码');
-    }catch(e){
-      toast('⚠️ 格式错误，请检查数据');
-      return false;
-    }
-  });
-}
+// 兑换码系统 - 全部通过后端验证
+// 前端只存session token和显示状态，不存API密钥
+// 管理员面板也通过后端API操作，密钥安全存储在后端
 
 // ===== 渲染兑换码状态 =====
 function renderRedeemStatus(){
@@ -5377,8 +4914,8 @@ function showRedeemModal(){
   showModal('🎫 兑换码', `
     <div style="margin-bottom:16px;">
       <label style="font-size:0.82rem;color:var(--text2);display:block;margin-bottom:8px;">输入兑换码</label>
-      <input type="text" class="input" id="rdm_code" placeholder="NCxxxxxxxxxx" style="font-family:monospace;font-size:0.82rem;letter-spacing:0.5px;" value="">
-      <p style="font-size:0.72rem;color:var(--text3);margin-top:6px;">填入兑换码后API自动配置，每玩一回合消耗1次额度。每个兑换码只能使用一次。</p>
+      <input type="text" class="input" id="rdm_code" placeholder="NC-XXXX-XXXX" style="font-family:monospace;font-size:0.9rem;letter-spacing:1px;text-align:center;font-weight:600;" value="">
+      <p style="font-size:0.72rem;color:var(--text3);margin-top:6px;line-height:1.5;">输入短码即可兑换回合数，每玩一回合消耗1次额度。兑换码由管理员通过后端生成。</p>
     </div>
     ${isActivated ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;">
       ✅ 当前已激活 · 剩余 <strong style="color:var(--gold)">${redeemState.totalTurns - redeemState.usedTurns}</strong> 回合
@@ -5390,51 +4927,50 @@ function showRedeemModal(){
   });
 }
 
-// ===== 激活兑换码 =====
-function activateRedeemCode(code){
-  const data = decodeRedeemCode(code);
-  if(!data || !data.apiKey || !data.turns){
-    toast('⚠️ 无效的兑换码，请检查是否输入正确');
-    return;
+// ===== 激活兑换码（后端验证） =====
+async function activateRedeemCode(code){
+  toast('验证中...');
+  try{
+    const resp = await fetch(API_BASE + '/api/redeem', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ code })
+    });
+
+    const data = await resp.json();
+
+    if(!resp.ok){
+      toast('⚠️ ' + (data.error || '验证失败'));
+      return;
+    }
+
+    // 后端验证成功，保存session
+    sessionToken = data.sessionToken;
+    sessionRemaining = data.remaining;
+    LS.set('sessionToken', sessionToken);
+
+    redeemState = {
+      code,
+      totalTurns: data.totalTurns,
+      usedTurns: 0,
+      platformName: data.platformName || '',
+      activatedAt: Date.now()
+    };
+    LS.set('redeemState', redeemState);
+
+    closeModal();
+    renderRedeemStatus();
+    toast('✅ 兑换码激活成功！可游玩 '+data.totalTurns+' 回合');
+  }catch(err){
+    console.error('Redeem error:', err);
+    toast('⚠️ 网络错误，请确认后端服务正在运行');
   }
-  if(!data.apiUrl){
-    toast('⚠️ 兑换码缺少API地址');
-    return;
-  }
+}
 
-  // 检查兑换码是否已被使用（基于nonce唯一ID，一次性）
-  const nonceId = data.nonceId || ('raw_' + code.trim().replace(/[-\s]/g,'').toUpperCase().substring(0,12));
-  if(usedRedeemCodes.includes(nonceId)){
-    toast('⚠️ 此兑换码已被使用过，每个码只能激活一次');
-    return;
-  }
-
-  // 写入redeemState
-  redeemState = {
-    code,
-    nonceId,
-    apiUrl: data.apiUrl,
-    apiKey: data.apiKey,
-    model: data.model || 'deepseek-chat',
-    totalTurns: data.turns,
-    usedTurns: 0,
-    activatedAt: Date.now()
-  };
-  LS.set('redeemState', redeemState);
-
-  // 标记兑换码为已使用（以nonceId存储，永久不可再用）
-  usedRedeemCodes.push(nonceId);
-  LS.set('usedRedeemCodes', usedRedeemCodes);
-
-  // 同步到settings（这样所有API调用都能用）
-  settings.apiUrl = data.apiUrl;
-  settings.apiKey = data.apiKey;
-  settings.model = data.model || settings.model || 'deepseek-chat';
-  LS.set('settings', settings);
-
-  closeModal();
-  renderRedeemStatus();
-  toast('✅ 兑换码激活成功！可游玩 '+data.turns+' 回合');
+// ===== 检查兑换码是否还有回合数 =====
+function checkRedeemAvailable(){
+  if(!redeemState) return hasActiveSession();
+  return (redeemState.totalTurns - redeemState.usedTurns) > 0;
 }
 
 // ===== 清除兑换码 =====
@@ -5445,171 +4981,216 @@ function clearRedeemCode(){
   toast('兑换码已清除');
 }
 
-// ===== 消耗一回合 =====
-function consumeRedeemTurn(){
-  if(!redeemState) return; // 没有兑换码，不消耗
-  redeemState.usedTurns = (redeemState.usedTurns || 0) + 1;
-  LS.set('redeemState', redeemState);
-  renderRedeemStatus();
-  // 剩余回合数告警
-  const remaining = redeemState.totalTurns - redeemState.usedTurns;
-  if(remaining === 3) toast('⚠️ 兑换码还剩 3 回合');
-  if(remaining === 1) toast('⚠️ 兑换码仅剩最后 1 回合！');
-  if(remaining <= 0){
-    // 兑换码用完，弹出提示
-    setTimeout(()=>{
-      showModal('🎫 兑换码已用完', `
-        <p style="font-size:0.88rem;line-height:1.7;margin-bottom:16px;">你的兑换码回合数已全部用完，无法继续游戏。</p>
-        <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">请获取新的兑换码后继续冒险！</p>
-        <div style="display:flex;gap:10px;">
-          <button class="btn btn-ghost btn-sm" style="flex:1;" onclick="closeModal()">关闭</button>
-          <button class="btn btn-primary btn-sm" style="flex:1;" onclick="closeModal();switchPage('about');setTimeout(()=>showRedeemModal(),300)">🎫 输入新兑换码</button>
-        </div>
-      `, null, true);
-    }, 500);
-  }
-}
 
-// ===== 检查兑换码是否还有回合数 =====
-function checkRedeemAvailable(){
-  if(!redeemState) return true; // 没兑换码，走正常settings流程
-  const remaining = redeemState.totalTurns - redeemState.usedTurns;
-  return remaining > 0;
-}
 
 // ============================================================
-//  管理员后台 - 生成兑换码
+//  管理员后台 - 通过后端API管理
 // ============================================================
-let _adminUnlocked = false;
+let _adminToken = LS.get('adminToken', '');
+let _adminCodesList = []; // 从后端获取的兑换码列表
+let _lastBatchCodes = []; // 本次批量生成的码
 
 function showAdminPanel(){
-  showModal('🔑 管理员后台', `
-    <div id="admin_content">
-      <div style="margin-bottom:14px;">
-        <label style="font-size:0.82rem;color:var(--text2);display:block;margin-bottom:6px;">管理员密码</label>
-        <input type="password" class="input" id="admin_pwd" placeholder="输入密码">
+  if(_adminToken){
+    // 已登录，直接进入后台
+    renderAdminPanel();
+  } else {
+    // 未登录，显示密码输入
+    showModal('🔑 管理员后台', `
+      <div id="admin_content">
+        <div style="margin-bottom:14px;">
+          <label style="font-size:0.82rem;color:var(--text2);display:block;margin-bottom:6px;">管理员密码</label>
+          <input type="password" class="input" id="admin_pwd" placeholder="输入密码">
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="adminLogin()" style="width:100%;">进入后台</button>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="unlockAdmin()" style="width:100%;">进入后台</button>
-    </div>
-  `, null, true);
-}
-
-function unlockAdmin(){
-  const pwd = gv('admin_pwd').trim();
-  // 简单密码比对（前端保护，主要防普通用户误操作）
-  const storedPwd = LS.get('adminPwd', ADMIN_PWD_HASH);
-  if(pwd !== storedPwd){
-    toast('⚠️ 密码错误');
-    return;
+    `, null, true);
   }
-  _adminUnlocked = true;
-  renderAdminPanel();
 }
 
-function renderAdminPanel(){
+async function adminLogin(){
+  const pwd = gv('admin_pwd').trim();
+  if(!pwd){ toast('请输入密码'); return; }
+  toast('登录中...');
+  try{
+    const resp = await fetch(API_BASE + '/api/admin/login', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ password: pwd })
+    });
+    const data = await resp.json();
+    if(!resp.ok){
+      toast('⚠️ ' + (data.error || '登录失败'));
+      return;
+    }
+    _adminToken = data.adminToken;
+    LS.set('adminToken', _adminToken);
+    toast('✅ 登录成功');
+    renderAdminPanel();
+  }catch(err){
+    toast('⚠️ 网络错误，请确认后端服务正在运行');
+  }
+}
+
+async function renderAdminPanel(){
   const container = document.querySelector('.modal-body');
   if(!container) return;
 
-  // 读取当前API配置
-  const savedApiUrl = settings.apiUrl || '';
-  const savedApiKey = settings.apiKey || '';
-  const savedModel = settings.model || 'deepseek-chat';
+  // 显示加载中
+  container.innerHTML = `<div style="text-align:center;padding:20px;"><p style="color:var(--text2);">加载中...</p></div>`;
 
-  const existingCodes = adminCodes.map((c,i) => `
+  try{
+    // 并行获取配置和兑换码列表
+    const [configResp, codesResp, statsResp] = await Promise.all([
+      fetch(API_BASE + '/api/admin/config', { headers:{'x-admin-token': _adminToken} }),
+      fetch(API_BASE + '/api/admin/codes', { headers:{'x-admin-token': _adminToken} }),
+      fetch(API_BASE + '/api/admin/stats', { headers:{'x-admin-token': _adminToken} })
+    ]);
+
+    if(configResp.status === 401 || codesResp.status === 401){
+      // token过期，重新登录
+      _adminToken = '';
+      LS.del('adminToken');
+      toast('⚠️ 登录已过期，请重新登录');
+      showAdminPanel();
+      return;
+    }
+
+    const config = await configResp.json();
+    const codes = await codesResp.json();
+    const stats = await statsResp.json();
+
+    _adminCodesList = codes;
+
+    const hasKey = config.hasApiKey;
+    const keyHint = hasKey ? `已配置 (${config.defaultApiKey})` : '未配置';
+
+    container.innerHTML = `
+      <div class="admin-panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <h4 style="margin:0;">📊 概况</h4>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-sm btn-ghost" onclick="showChangePwdPanel()" style="font-size:0.7rem;">修改密码</button>
+            <button class="btn btn-sm btn-ghost" onclick="adminLogout()" style="font-size:0.7rem;color:var(--red);">退出</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
+          <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
+            <div style="font-size:1.2rem;font-weight:700;color:var(--green);">${stats.totalCodes}</div>
+            <div style="font-size:0.68rem;color:var(--text2);">总兑换码</div>
+          </div>
+          <div style="background:rgba(255,200,100,0.08);border:1px solid rgba(255,200,100,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
+            <div style="font-size:1.2rem;font-weight:700;color:var(--gold);">${stats.usedCodes}</div>
+            <div style="font-size:0.68rem;color:var(--text2);">已使用</div>
+          </div>
+          <div style="background:rgba(100,180,255,0.08);border:1px solid rgba(100,180,255,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
+            <div style="font-size:1.2rem;font-weight:700;color:#6bb8ff;">${stats.activeSessions}</div>
+            <div style="font-size:0.68rem;color:var(--text2);">活跃会话</div>
+          </div>
+        </div>
+
+        <h4>⚙️ API配置</h4>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">平台选择</label>
+          <select class="input" id="adm_platform" onchange="onPlatformChange()" style="font-size:0.82rem;">
+            ${config.platforms.map((p,i) => `<option value="${p.id}"${p.id===config.defaultPlatform?' selected':''}>${p.name}${p.id<9?' ('+p.model+')':''}</option>`).join('')}
+          </select>
+        </div>
+        <div id="adm_custom_fields" style="display:none;">
+          <div style="margin-bottom:10px;">
+            <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API地址</label>
+            <input type="text" class="input" id="adm_url" value="${esc(config.defaultCustomUrl)}" placeholder="https://api.deepseek.com" style="font-size:0.82rem;">
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">模型名称</label>
+            <input type="text" class="input" id="adm_model" value="${esc(config.defaultCustomModel)}" placeholder="deepseek-chat" style="font-size:0.82rem;">
+          </div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API密钥</label>
+          <input type="password" class="input" id="adm_key" placeholder="${hasKey?'已保存，留空则沿用':'sk-...'}" style="font-size:0.82rem;">
+          <p style="font-size:0.68rem;color:var(--text3);margin-top:2px;">${hasKey?'✅ 后端已保存API密钥':'⚠️ 请填写API密钥并保存'}</p>
+        </div>
+        <button class="btn btn-sm btn-ghost" onclick="saveAdminConfig()" style="width:100%;margin-bottom:16px;font-size:0.78rem;">💾 保存配置</button>
+
+        <h4>🎫 生成兑换码</h4>
+        <div>
+          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:6px;">每张回合数</label>
+          <div class="turns-selector" id="turnsSelector">
+            <button class="turns-btn" onclick="selectTurns(this,1)">1回合</button>
+            <button class="turns-btn active" onclick="selectTurns(this,5)">5回合</button>
+            <button class="turns-btn" onclick="selectTurns(this,10)">10回合</button>
+            <button class="turns-btn" onclick="selectTurns(this,20)">20回合</button>
+            <button class="turns-btn" onclick="selectTurns(this,50)">50回合</button>
+            <button class="turns-btn" onclick="selectTurns(this,100)">100回合</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+            <label style="font-size:0.78rem;color:var(--text2);white-space:nowrap;">自定义：</label>
+            <input type="number" class="input" id="adm_custom_turns" placeholder="自定义回合数" min="1" style="font-size:0.82rem;padding:8px 10px;">
+          </div>
+
+          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:6px;">生成数量</label>
+          <div class="turns-selector" id="countSelector">
+            <button class="turns-btn active" onclick="selectCount(this,1)">1张</button>
+            <button class="turns-btn" onclick="selectCount(this,10)">10张</button>
+            <button class="turns-btn" onclick="selectCount(this,20)">20张</button>
+            <button class="turns-btn" onclick="selectCount(this,50)">50张</button>
+            <button class="turns-btn" onclick="selectCount(this,100)">100张</button>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+            <label style="font-size:0.78rem;color:var(--text2);white-space:nowrap;">自定义：</label>
+            <input type="number" class="input" id="adm_custom_count" placeholder="自定义数量" min="1" max="500" style="font-size:0.82rem;padding:8px 10px;">
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="generateRedeemCode()" style="width:100%;margin-bottom:4px;">✨ 批量生成短码</button>
+        <p id="adm_code_hint" style="font-size:0.68rem;color:var(--text3);text-align:center;margin-bottom:14px;"></p>
+
+        <div id="adm_batch_output" style="display:none;margin-bottom:14px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span style="font-size:0.8rem;color:var(--text2);" id="adm_batch_title">已生成 0 张</span>
+            <button class="btn btn-sm btn-primary" onclick="copyAllCodes()" style="font-size:0.72rem;padding:5px 12px;">📋 一键复制全部</button>
+          </div>
+          <div id="adm_batch_list" style="background:rgba(0,0,0,0.3);border-radius:var(--radius-xs);padding:10px 12px;max-height:180px;overflow-y:auto;"></div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:6px;">
+          <h4 style="margin:0;">📋 兑换码列表</h4>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-sm btn-ghost" onclick="copyAllHistoryCodes()" style="font-size:0.7rem;padding:4px 8px;">复制全部</button>
+            <button class="btn btn-sm btn-ghost" onclick="refreshAdminCodes()" style="font-size:0.7rem;padding:4px 8px;">🔄</button>
+            <button class="btn btn-sm btn-ghost" onclick="clearAllAdminCodes()" style="font-size:0.7rem;padding:4px 8px;color:var(--red);">清空</button>
+          </div>
+        </div>
+        <div class="code-list" id="adm_code_list">${renderAdminCodesList(codes)}</div>
+
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--glass-border);">
+          <p style="font-size:0.72rem;color:var(--text3);margin-bottom:8px;line-height:1.5;">💡 生成短码后直接发给玩家，玩家输入即可兑换。所有密钥安全存储在后端。</p>
+        </div>
+      </div>
+    `;
+    // 设置默认选中5回合、1张
+    document.querySelector('#turnsSelector').dataset.selected = 5;
+    document.querySelector('#countSelector').dataset.selected = 1;
+  }catch(err){
+    container.innerHTML = `<div style="text-align:center;padding:20px;">
+      <p style="color:var(--red);">⚠️ 加载失败</p>
+      <p style="font-size:0.78rem;color:var(--text2);">请确认后端服务正在运行</p>
+      <button class="btn btn-sm btn-ghost" onclick="renderAdminPanel()" style="margin-top:10px;">重试</button>
+    </div>`;
+  }
+}
+
+function renderAdminCodesList(codes){
+  if(!codes || !codes.length) return '<p style="font-size:0.78rem;color:var(--text3);">暂无兑换码</p>';
+  return codes.map((c,i) => `
     <div class="code-item">
-      <div class="ci-code" style="font-size:0.92rem;letter-spacing:1px;" onclick="copyCode('${esc(c.code)}')" title="点击复制">${esc(c.code)}</div>
-      <div class="ci-turns">${c.turns}回合</div>
-      <button class="ci-del" onclick="deleteAdminCode(${i})" title="删除">✕</button>
+      <div class="ci-code" style="font-size:0.92rem;letter-spacing:1.5px;font-weight:600;font-family:monospace;" onclick="copyCode('${esc(c.code)}')" title="点击复制">${esc(c.code)}
+        <span style="font-size:0.62rem;background:rgba(${c.activatedBy==='已激活'?'255,80,80':'100,255,150'},0.15);color:${c.activatedBy==='已激活'?'#ff6b6b':'#6bffa0'};padding:2px 5px;border-radius:4px;margin-left:4px;">${c.activatedBy}</span>
+      </div>
+      <div class="ci-turns">${c.totalTurns}回合${c.remaining>=0?' · 剩'+c.remaining:''}</div>
+      <button class="ci-del" onclick="deleteAdminCode('${esc(c.code)}')" title="删除">✕</button>
     </div>
-  `).join('') || '<p style="font-size:0.78rem;color:var(--text3);">暂无生成的兑换码</p>';
-
-  container.innerHTML = `
-    <div class="admin-panel">
-      <h4>⚙️ API配置</h4>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">平台选择</label>
-        <select class="input" id="adm_platform" onchange="onPlatformChange()" style="font-size:0.82rem;">
-          ${PRESET_PLATFORMS.map((p,i) => {
-            const matchId = findPresetPlatform(savedApiUrl, savedModel);
-            const isSel = (i === matchId) || (i === 0 && !savedApiUrl);
-            return `<option value="${i}"${isSel?' selected':''}>${p.name}${i<9?' ('+p.model+')':''}</option>`;
-          }).join('')}
-        </select>
-      </div>
-      <div id="adm_custom_fields" style="display:${(findPresetPlatform(savedApiUrl,savedModel)===9 && savedApiUrl)?'block':'none'};">
-        <div style="margin-bottom:10px;">
-          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API地址</label>
-          <input type="text" class="input" id="adm_url" value="${esc(savedApiUrl)}" placeholder="https://api.deepseek.com" style="font-size:0.82rem;">
-        </div>
-        <div style="margin-bottom:10px;">
-          <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">模型名称</label>
-          <input type="text" class="input" id="adm_model" value="${esc(savedModel)}" placeholder="deepseek-chat" style="font-size:0.82rem;">
-        </div>
-      </div>
-      <div style="margin-bottom:16px;">
-        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:4px;">API密钥</label>
-        <input type="password" class="input" id="adm_key" value="${esc(savedApiKey)}" placeholder="sk-..." style="font-size:0.82rem;">
-      </div>
-
-      <h4>🎫 生成兑换码</h4>
-      <div>
-        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:6px;">每张回合数</label>
-        <div class="turns-selector" id="turnsSelector">
-          <button class="turns-btn" onclick="selectTurns(this,1)">1回合</button>
-          <button class="turns-btn active" onclick="selectTurns(this,5)">5回合</button>
-          <button class="turns-btn" onclick="selectTurns(this,10)">10回合</button>
-          <button class="turns-btn" onclick="selectTurns(this,20)">20回合</button>
-          <button class="turns-btn" onclick="selectTurns(this,50)">50回合</button>
-          <button class="turns-btn" onclick="selectTurns(this,100)">100回合</button>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
-          <label style="font-size:0.78rem;color:var(--text2);white-space:nowrap;">自定义：</label>
-          <input type="number" class="input" id="adm_custom_turns" placeholder="自定义回合数" min="1" style="font-size:0.82rem;padding:8px 10px;">
-        </div>
-
-        <label style="font-size:0.78rem;color:var(--text2);display:block;margin-bottom:6px;">生成数量</label>
-        <div class="turns-selector" id="countSelector">
-          <button class="turns-btn active" onclick="selectCount(this,1)">1张</button>
-          <button class="turns-btn" onclick="selectCount(this,10)">10张</button>
-          <button class="turns-btn" onclick="selectCount(this,20)">20张</button>
-          <button class="turns-btn" onclick="selectCount(this,50)">50张</button>
-          <button class="turns-btn" onclick="selectCount(this,100)">100张</button>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
-          <label style="font-size:0.78rem;color:var(--text2);white-space:nowrap;">自定义：</label>
-          <input type="number" class="input" id="adm_custom_count" placeholder="自定义数量" min="1" max="500" style="font-size:0.82rem;padding:8px 10px;">
-        </div>
-      </div>
-      <button class="btn btn-primary btn-sm" onclick="generateRedeemCode()" style="width:100%;margin-bottom:4px;">✨ 批量生成兑换码</button>
-      <p id="adm_code_hint" style="font-size:0.68rem;color:var(--text3);text-align:center;margin-bottom:14px;"></p>
-
-      <div id="adm_batch_output" style="display:none;margin-bottom:14px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-          <span style="font-size:0.8rem;color:var(--text2);" id="adm_batch_title">已生成 0 张</span>
-          <button class="btn btn-sm btn-primary" onclick="copyAllCodes()" style="font-size:0.72rem;padding:5px 12px;">📋 一键复制全部</button>
-        </div>
-        <div id="adm_batch_list" style="background:rgba(0,0,0,0.3);border-radius:var(--radius-xs);padding:10px 12px;max-height:180px;overflow-y:auto;"></div>
-      </div>
-
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;margin-bottom:6px;">
-        <h4 style="margin:0;">📋 已生成的码</h4>
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-sm btn-ghost" onclick="copyAllHistoryCodes()" style="font-size:0.7rem;padding:4px 8px;">复制全部</button>
-          <button class="btn btn-sm btn-ghost" onclick="clearAllAdminCodes()" style="font-size:0.7rem;padding:4px 8px;color:var(--red);">清空</button>
-        </div>
-      </div>
-      <div class="code-list" id="adm_code_list">${existingCodes}</div>
-
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--glass-border);display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-sm btn-ghost" onclick="exportCodebook()" style="font-size:0.72rem;">📤 导出码本</button>
-        <button class="btn btn-sm btn-ghost" onclick="importCodebook()" style="font-size:0.72rem;">📥 导入码本</button>
-        <button class="btn btn-sm btn-ghost" onclick="showChangePwdPanel()" style="font-size:0.72rem;">修改密码</button>
-      </div>
-    </div>
-  `;
-  // 设置默认选中5回合、1张
-  document.querySelector('#turnsSelector').dataset.selected = 5;
-  document.querySelector('#countSelector').dataset.selected = 1;
+  `).join('');
 }
 
 function onPlatformChange(){
@@ -5636,24 +5217,37 @@ function selectCount(btn, count){
   if(custom) custom.value = '';
 }
 
-let _lastBatchCodes = []; // 本次批量生成的码
-
-function generateRedeemCode(){
+async function saveAdminConfig(){
+  const pid = parseInt(document.getElementById('adm_platform')?.value ?? '0');
   const apiKey = gv('adm_key').trim();
-  if(!apiKey){ toast('请填写API密钥'); return; }
+  const customUrl = pid === 9 ? gv('adm_url').trim() : '';
+  const customModel = pid === 9 ? gv('adm_model').trim() : '';
+
+  toast('保存中...');
+  try{
+    const resp = await fetch(API_BASE + '/api/admin/config', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'x-admin-token': _adminToken},
+      body:JSON.stringify({ platformId: pid, apiKey, customUrl, customModel })
+    });
+    const data = await resp.json();
+    if(!resp.ok){ toast('⚠️ ' + (data.error || '保存失败')); return; }
+    toast('✅ 配置已保存到后端');
+    renderAdminPanel(); // 刷新显示
+  }catch(err){
+    toast('⚠️ 网络错误');
+  }
+}
+
+async function generateRedeemCode(){
+  const apiKey = gv('adm_key').trim(); // 可选，留空用后端默认
 
   // 读取平台配置
   const pid = parseInt(document.getElementById('adm_platform')?.value ?? '0');
-  const platform = PRESET_PLATFORMS[pid] || PRESET_PLATFORMS[9];
-  let apiUrl, model;
-  if(pid < 9){
-    apiUrl = platform.url;
-    model = platform.model;
-  } else {
-    apiUrl = gv('adm_url').trim();
-    model = gv('adm_model').trim() || 'deepseek-chat';
-    if(!apiUrl){ toast('自定义平台需填写API地址'); return; }
-  }
+  const customUrl = pid === 9 ? gv('adm_url').trim() : '';
+  const customModel = pid === 9 ? (gv('adm_model').trim() || 'deepseek-chat') : '';
+
+  if(pid === 9 && !customUrl){ toast('自定义平台需填写API地址'); return; }
 
   // 读取回合数
   const customTurns = parseInt(gv('adm_custom_turns'));
@@ -5668,173 +5262,128 @@ function generateRedeemCode(){
   if(!count || count < 1){ toast('请选择有效的生成数量'); return; }
   if(count > 500){ toast('单次最多生成500张'); return; }
 
-  // 同步admin API到settings
-  settings.apiUrl = apiUrl;
-  settings.apiKey = apiKey;
-  settings.model = model;
-  LS.set('settings', settings);
+  toast('生成中...');
+  try{
+    const resp = await fetch(API_BASE + '/api/admin/generate-codes', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'x-admin-token': _adminToken},
+      body:JSON.stringify({
+        platformId: pid,
+        apiKey: apiKey || undefined, // 留空则用后端默认
+        customUrl,
+        customModel,
+        turns,
+        count
+      })
+    });
+    const data = await resp.json();
+    if(!resp.ok){ toast('⚠️ ' + (data.error || '生成失败')); return; }
 
-  // 批量生成
-  _lastBatchCodes = [];
-  for(let i=0;i<count;i++){
-    const code = encodeRedeemCode({apiUrl, apiKey, model, turns});
-    _lastBatchCodes.push(code);
-    // 解码提取nonceId（唯一指纹）
-    const decoded = decodeRedeemCode(code);
-    const nonceId = decoded?.nonceId || '—';
-    // 保存到管理员列表
-    adminCodes.unshift({code, nonceId, apiUrl, apiKey: apiKey.substring(0,8)+'...', model, turns, createdAt: new Date().toLocaleString('zh-CN')});
-  }
-  if(adminCodes.length > 500) adminCodes = adminCodes.slice(0,500);
-  LS.set('adminCodes', adminCodes);
+    _lastBatchCodes = data.codes || [];
 
-  // 显示批量结果
-  const batchOutput = document.getElementById('adm_batch_output');
-  const batchTitle = document.getElementById('adm_batch_title');
-  const batchList = document.getElementById('adm_batch_list');
-  if(batchOutput && batchList){
-    batchTitle.textContent = `已生成 ${count} 张（每张 ${turns} 回合）`;
-    batchList.innerHTML = _lastBatchCodes.map(c =>
-      `<div style="font-family:monospace;font-size:0.88rem;letter-spacing:1px;color:var(--accent3);padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer;" onclick="copyCode('${c}')" title="点击复制">${c}</div>`
-    ).join('');
-    batchOutput.style.display = 'block';
-    // 滚动到结果
-    batchOutput.scrollIntoView({behavior:'smooth', block:'nearest'});
-  }
-
-  // 刷新历史列表
-  refreshAdminCodeList();
-
-  // 码长提示
-  const hint = document.getElementById('adm_code_hint');
-  if(hint && _lastBatchCodes.length > 0){
-    const len = _lastBatchCodes[0].length;
-    const pid = parseInt(document.getElementById('adm_platform')?.value ?? '0');
-    if(pid < 9 && len <= 35){
-      hint.textContent = `码长${len}位 · 玩家粘贴即可用`;
-    } else {
-      hint.textContent = `码长${len}位 · 建议选用预设平台（DeepSeek等）可获更短兑换码`;
+    // 显示批量结果
+    const batchOutput = document.getElementById('adm_batch_output');
+    const batchTitle = document.getElementById('adm_batch_title');
+    const batchList = document.getElementById('adm_batch_list');
+    if(batchOutput && batchList){
+      batchTitle.textContent = `已生成 ${data.count} 张短码（每张 ${turns} 回合）`;
+      batchList.innerHTML = _lastBatchCodes.map(c =>
+        `<div style="font-family:monospace;font-size:0.95rem;letter-spacing:2px;color:var(--accent3);padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer;font-weight:600;" onclick="copyCode('${c}')" title="点击复制">${c}</div>`
+      ).join('');
+      batchOutput.style.display = 'block';
+      batchOutput.scrollIntoView({behavior:'smooth', block:'nearest'});
     }
-  }
 
-  toast(`✅ 已生成 ${count} 张兑换码，点击可单个复制`);
+    // 刷新列表
+    refreshAdminCodes();
+
+    // 码长提示
+    const hint = document.getElementById('adm_code_hint');
+    if(hint && _lastBatchCodes.length > 0){
+      hint.textContent = `短码10位 · 玩家输入即可兑换，密钥安全存储在后端`;
+    }
+
+    toast(`✅ 已生成 ${data.count} 张短码，点击可单个复制`);
+  }catch(err){
+    toast('⚠️ 网络错误，请确认后端服务正在运行');
+  }
 }
 
 function copyAllCodes(){
   if(!_lastBatchCodes.length){ toast('没有可复制的兑换码'); return; }
   const text = _lastBatchCodes.join('\n');
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(text).then(()=>toast(`✅ 已复制全部 ${_lastBatchCodes.length} 张兑换码`)).catch(()=>{
-      fallbackCopyText(text);
-    });
-  } else {
-    fallbackCopyText(text);
-  }
+  clipboardWrite(text, `✅ 已复制全部 ${_lastBatchCodes.length} 张兑换码`);
 }
 
-function fallbackCopyText(text){
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
-  document.body.appendChild(ta);
-  ta.select();
+async function refreshAdminCodes(){
   try{
-    document.execCommand('copy');
-    toast(`✅ 已复制 ${_lastBatchCodes.length} 张兑换码`);
-  }catch(e){
-    toast('复制失败，请手动长按选择');
-  }
-  document.body.removeChild(ta);
-}
-
-function refreshAdminCodeList(){
-  const listEl = document.getElementById('adm_code_list');
-  if(!listEl) return;
-  listEl.innerHTML = adminCodes.map((c,i) => {
-    const isUsed = c.nonceId && usedRedeemCodes.includes(c.nonceId);
-    const usedBadge = isUsed
-      ? `<span style="font-size:0.62rem;background:rgba(255,80,80,0.2);color:#ff6b6b;padding:2px 5px;border-radius:4px;margin-left:4px;">已使用</span>`
-      : `<span style="font-size:0.62rem;background:rgba(100,255,150,0.15);color:#6bffa0;padding:2px 5px;border-radius:4px;margin-left:4px;">未使用</span>`;
-    return `
-    <div class="code-item">
-      <div class="ci-code" style="font-size:0.88rem;letter-spacing:1px;" onclick="copyCode('${esc(c.code)}')" title="点击复制">${esc(c.code)}${usedBadge}</div>
-      <div class="ci-turns">${c.turns}回合</div>
-      <button class="ci-del" onclick="deleteAdminCode(${i})" title="删除">✕</button>
-    </div>
-  `;
-  }).join('') || '<p style="font-size:0.78rem;color:var(--text3);">暂无生成的兑换码</p>';
-}
-
-let _lastGeneratedCode = '';
-function copyLastCode(){
-  const codeEl = document.getElementById('adm_code_text');
-  if(!codeEl) return;
-  const code = codeEl.textContent;
-  _lastGeneratedCode = code;
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(code).then(()=>toast('✅ 已复制到剪贴板')).catch(()=>{
-      // fallback
-      selectText(codeEl);
-      toast('请手动复制');
-    });
-  } else {
-    selectText(codeEl);
-    toast('请手动长按复制');
-  }
+    const resp = await fetch(API_BASE + '/api/admin/codes', { headers:{'x-admin-token': _adminToken} });
+    if(resp.status === 401){ adminLogout(); return; }
+    const codes = await resp.json();
+    _adminCodesList = codes;
+    const listEl = document.getElementById('adm_code_list');
+    if(listEl) listEl.innerHTML = renderAdminCodesList(codes);
+  }catch(e){}
 }
 
 function copyCode(code){
+  clipboardWrite(code, '✅ 已复制：' + code);
+}
+
+function clipboardWrite(text, successMsg){
   if(navigator.clipboard){
-    navigator.clipboard.writeText(code).then(()=>toast('✅ 已复制：'+code)).catch(()=>toast('复制失败，请长按手动复制'));
+    navigator.clipboard.writeText(text).then(()=>toast(successMsg)).catch(()=>{
+      fallbackClipboard(text, successMsg);
+    });
   } else {
-    toast('兑换码：'+code+'（长按复制）');
+    fallbackClipboard(text, successMsg);
   }
 }
 
-function selectText(el){
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
-
-function copyAllHistoryCodes(){
-  if(!adminCodes.length){ toast('暂无历史兑换码'); return; }
-  const text = adminCodes.map(c=>c.code).join('\n');
-  if(navigator.clipboard){
-    navigator.clipboard.writeText(text).then(()=>toast(`✅ 已复制全部 ${adminCodes.length} 张历史兑换码`)).catch(()=>fallbackCopyText2(text, adminCodes.length));
-  } else {
-    fallbackCopyText2(text, adminCodes.length);
-  }
-}
-
-function fallbackCopyText2(text, count){
+function fallbackClipboard(text, successMsg){
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
   document.body.appendChild(ta);
   ta.select();
-  try{ document.execCommand('copy'); toast(`✅ 已复制 ${count} 张兑换码`); }
+  try{ document.execCommand('copy'); toast(successMsg || '✅ 已复制'); }
   catch(e){ toast('复制失败，请手动选择'); }
   document.body.removeChild(ta);
 }
 
-function clearAllAdminCodes(){
-  if(!adminCodes.length){ toast('列表已是空的'); return; }
-  showModal('⚠️ 确认清空', `<p style="font-size:0.9rem;">将清空全部 ${adminCodes.length} 条历史记录（码本数据不受影响），确认？</p>`, ()=>{
-    adminCodes = [];
-    LS.set('adminCodes', adminCodes);
-    refreshAdminCodeList();
-    toast('✅ 已清空历史记录');
+function copyAllHistoryCodes(){
+  if(!_adminCodesList.length){ toast('暂无兑换码'); return; }
+  const text = _adminCodesList.map(c=>c.code).join('\n');
+  clipboardWrite(text, `✅ 已复制全部 ${_adminCodesList.length} 张兑换码`);
+}
+
+async function clearAllAdminCodes(){
+  if(!_adminCodesList.length){ toast('列表已是空的'); return; }
+  showModal('⚠️ 确认清空', `<p style="font-size:0.9rem;">将清空后端全部 ${_adminCodesList.length} 条兑换码，此操作不可撤销！确认？</p>`, async ()=>{
+    try{
+      const resp = await fetch(API_BASE + '/api/admin/clear-codes', {
+        method:'POST',
+        headers:{'x-admin-token': _adminToken}
+      });
+      const data = await resp.json();
+      if(!resp.ok){ toast('⚠️ ' + (data.error || '清空失败')); return; }
+      toast('✅ 已清空所有兑换码');
+      refreshAdminCodes();
+    }catch(err){ toast('⚠️ 网络错误'); }
   });
 }
 
-function deleteAdminCode(idx){
-  adminCodes.splice(idx, 1);
-  LS.set('adminCodes', adminCodes);
-  refreshAdminCodeList();
-  toast('已删除');
+async function deleteAdminCode(code){
+  try{
+    const resp = await fetch(API_BASE + '/api/admin/codes/' + encodeURIComponent(code), {
+      method:'DELETE',
+      headers:{'x-admin-token': _adminToken}
+    });
+    const data = await resp.json();
+    if(!resp.ok){ toast('⚠️ ' + (data.error || '删除失败')); return; }
+    toast('✅ 已删除');
+    refreshAdminCodes();
+  }catch(err){ toast('⚠️ 网络错误'); }
 }
 
 function showChangePwdPanel(){
@@ -5862,20 +5411,36 @@ function showChangePwdPanel(){
   `;
 }
 
-function changeAdminPwd(){
+async function changeAdminPwd(){
   const old = gv('pwd_old').trim();
   const newPwd = gv('pwd_new').trim();
   const confirm = gv('pwd_confirm').trim();
-  const storedPwd = LS.get('adminPwd', ADMIN_PWD_HASH);
 
-  if(old !== storedPwd){toast('当前密码错误');return;}
+  if(!old){toast('请输入当前密码');return;}
   if(!newPwd){toast('请输入新密码');return;}
   if(newPwd !== confirm){toast('两次密码不一致');return;}
   if(newPwd.length < 4){toast('密码不能少于4位');return;}
 
-  LS.set('adminPwd', newPwd);
-  toast('✅ 密码修改成功');
-  renderAdminPanel();
+  try{
+    const resp = await fetch(API_BASE + '/api/admin/change-password', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'x-admin-token': _adminToken},
+      body:JSON.stringify({ oldPassword: old, newPassword: newPwd })
+    });
+    const data = await resp.json();
+    if(!resp.ok){ toast('⚠️ ' + (data.error || '修改失败')); return; }
+    toast('✅ 密码修改成功');
+    renderAdminPanel();
+  }catch(err){
+    toast('⚠️ 网络错误');
+  }
+}
+
+function adminLogout(){
+  _adminToken = '';
+  LS.del('adminToken');
+  closeModal();
+  toast('已退出管理员');
 }
 
 // ============================================================
@@ -5891,7 +5456,7 @@ function showDisclaimer(){
       <p>2. 用户输入内容的合规性由用户自行负责。严禁利用本平台生成或传播以下内容：</p>
       <p style="padding-left:12px;">- 色情、淫秽、低俗内容<br>- 毒品、赌博相关信息<br>- 暴力、恐怖、犯罪教唆<br>- 仇恨言论、歧视性内容<br>- 侵犯他人隐私和知识产权的内容</p>
       <p>3. 违规内容可能触犯《刑法》《网络安全法》《个人信息保护法》等法律法规，使用者需自行承担法律责任。</p>
-      <p>4. 所有数据保存在浏览器本地（localStorage），不会上传到任何服务器。API密钥也仅存储在你的设备上。</p>
+      <p>4. 所有游戏数据保存在浏览器本地（localStorage），API密钥安全存储在后端服务器，不会暴露给前端。</p>
       <p>5. 本服务依赖第三方AI接口，不保证服务的稳定性和可用性。</p>
       <p>6. 使用本平台即表示你已阅读并理解以上声明。</p>
       <div style="text-align:center;margin-top:16px;">

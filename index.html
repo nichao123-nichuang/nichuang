@@ -7,7 +7,7 @@
 <style>
 :root {
   --bg:#120810; --bg2:rgba(22,10,18,0.94); --glass:rgba(30,12,24,0.78);
-  --glass-border:rgba(255,100,180,0.13); --glass-hover:reba(255,100,180,0.28);
+  --glass-border:rgba(255,100,180,0.13); --glass-hover:rgba(255,100,180,0.28);
   --text:#f0dce8; --text2:#b890a8; --text3:#7a5068;
   --accent:#ff6b9d; --accent2:#c084fc; --accent3:#f9a8d4;
   --gold:#ffb86c; --green:#4ade80; --red:#ff5c8a; --cyan:#f0abfc;
@@ -116,6 +116,8 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.5;}
 .script-card .cover{width:80px;height:108px;border-radius:var(--radius-sm);overflow:hidden;flex-shrink:0;background:rgba(0,0,0,0.3);}
 .script-card .cover img{width:100%;height:100%;object-fit:cover;}
 .script-card .cover .placeholder-cover{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2rem;background:linear-gradient(135deg,rgba(255,100,168,0.2),rgba(192,132,252,0.2));}
+.script-card .cover .cover-change-btn{position:absolute;bottom:2px;right:2px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;font-size:0.65rem;opacity:0;transition:opacity 0.2s;cursor:pointer;z-index:2;border:none;padding:0;color:#fff;}
+.script-card .cover:hover .cover-change-btn{opacity:1;}
 .script-card .info{flex:1;display:flex;flex-direction:column;justify-content:space-between;min-width:0;}
 .script-card .info h4{font-size:0.95rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .script-card .info .tags{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;}
@@ -472,6 +474,96 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.5;}
 #charChatMessages .msg-ai .bubble{background:var(--glass);border:1px solid var(--glass-border);border-radius:var(--radius-xs) var(--radius) var(--radius) var(--radius-xs);padding:10px 14px;font-size:0.88rem;line-height:1.6;color:var(--text);}
 #charChatMessages .msg-with-avatar .bubble{padding:10px 14px;}
 #charChatMessages .msg-user .bubble{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-radius:var(--radius) var(--radius-xs) var(--radius-xs) var(--radius);padding:10px 16px;font-size:0.88rem;line-height:1.6;box-shadow:var(--shadow);}
+
+/* ===== 语音通话界面 ===== */
+.call-screen{
+  position:fixed;inset:0;z-index:80;display:none;flex-direction:column;align-items:center;justify-content:space-between;
+  background:linear-gradient(160deg,#0f0c24 0%,#1a1035 40%,#0d1a2e 100%);
+  padding:60px 24px 50px;
+}
+.call-screen.active{display:flex;}
+/* 顶部：头像+名字+状态 */
+.call-top{display:flex;flex-direction:column;align-items:center;gap:16px;}
+.call-avatar-wrap{position:relative;width:120px;height:120px;}
+.call-avatar-img{width:120px;height:120px;border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,0.15);box-shadow:0 0 40px rgba(139,92,246,0.4);}
+.call-avatar-text{width:120px;height:120px;border-radius:50%;background:var(--glass);border:3px solid rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:3rem;box-shadow:0 0 40px rgba(139,92,246,0.4);}
+/* 波纹动画（接通中） */
+.call-ripple{
+  position:absolute;inset:-12px;border-radius:50%;
+  border:2px solid rgba(139,92,246,0.5);
+  animation:callRipple 2s infinite;
+  pointer-events:none;
+}
+.call-ripple:nth-child(2){animation-delay:0.7s;inset:-24px;}
+.call-ripple:nth-child(3){animation-delay:1.4s;inset:-36px;}
+@keyframes callRipple{
+  0%{opacity:0.7;transform:scale(1);}
+  100%{opacity:0;transform:scale(1.3);}
+}
+.call-name{font-size:1.6rem;font-weight:700;color:#fff;letter-spacing:1px;}
+.call-status{font-size:0.88rem;color:rgba(255,255,255,0.55);min-height:1.2em;}
+.call-status.connecting{color:#a78bfa;animation:blink 1.2s infinite;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0.3};}
+.call-status.speaking-ai{color:#6bffa0;}
+.call-status.listening{color:#f87171;}
+
+/* 中部：字幕显示区 */
+.call-subtitle{
+  width:100%;max-height:120px;overflow-y:auto;
+  background:rgba(0,0,0,0.3);border-radius:12px;
+  padding:12px 16px;font-size:0.88rem;line-height:1.6;
+  color:rgba(255,255,255,0.85);text-align:center;
+  display:none;
+}
+.call-subtitle.show{display:block;}
+.call-subtitle-user{color:#a78bfa;margin-bottom:4px;}
+.call-subtitle-ai{color:#6bffa0;}
+
+/* 底部控制区 */
+.call-controls{display:flex;flex-direction:column;align-items:center;gap:24px;width:100%;}
+/* 按住说话按钮 */
+.call-ptt{
+  width:80px;height:80px;border-radius:50%;border:none;outline:none;cursor:pointer;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  box-shadow:0 0 20px rgba(139,92,246,0.5);
+  font-size:2rem;display:flex;align-items:center;justify-content:center;
+  transition:transform 0.1s,box-shadow 0.1s;
+  -webkit-user-select:none;user-select:none;
+  position:relative;
+}
+.call-ptt:active,.call-ptt.pressing{
+  transform:scale(0.92);
+  box-shadow:0 0 30px rgba(248,113,113,0.7);
+  background:linear-gradient(135deg,#ef4444,#dc2626);
+}
+.call-ptt.pressing::after{
+  content:'松开发送';
+  position:absolute;bottom:-28px;
+  font-size:0.72rem;color:rgba(255,255,255,0.7);
+  white-space:nowrap;
+}
+.call-ptt-hint{font-size:0.75rem;color:rgba(255,255,255,0.4);margin-top:-8px;}
+/* 挂断按钮行 */
+.call-btn-row{display:flex;gap:32px;align-items:center;}
+.call-btn{
+  width:60px;height:60px;border-radius:50%;border:none;outline:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:1.4rem;
+  transition:transform 0.1s,filter 0.1s;
+}
+.call-btn:active{transform:scale(0.9);}
+.call-hangup{background:linear-gradient(135deg,#ef4444,#b91c1c);box-shadow:0 4px 20px rgba(239,68,68,0.5);}
+.call-speaker{background:rgba(255,255,255,0.1);}
+.call-speaker.muted{background:rgba(255,255,255,0.05);opacity:0.5;}
+/* 声音波形（AI说话时显示） */
+.call-wave{display:none;gap:3px;align-items:flex-end;height:32px;}
+.call-wave.show{display:flex;}
+.call-wave-bar{width:4px;border-radius:2px;background:linear-gradient(var(--accent2),var(--accent));animation:waveBar 0.6s infinite alternate;}
+.call-wave-bar:nth-child(1){height:8px;animation-delay:0s;}
+.call-wave-bar:nth-child(2){height:18px;animation-delay:0.1s;}
+.call-wave-bar:nth-child(3){height:28px;animation-delay:0.2s;}
+.call-wave-bar:nth-child(4){height:20px;animation-delay:0.3s;}
+.call-wave-bar:nth-child(5){height:10px;animation-delay:0.4s;}
+@keyframes waveBar{from{transform:scaleY(0.4);}to{transform:scaleY(1);}}
 </style>
 </head>
 <body>
@@ -723,6 +815,50 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.5;}
 <!-- ===== Toast容器 ===== -->
 <div id="toastContainer"></div>
 
+<!-- ===== 语音通话界面 ===== -->
+<div class="call-screen" id="callScreen">
+  <!-- 顶部：头像+名字+状态 -->
+  <div class="call-top">
+    <div class="call-avatar-wrap">
+      <div id="callAvatarDisplay" class="call-avatar-text">👤</div>
+      <div class="call-ripple"></div>
+      <div class="call-ripple"></div>
+      <div class="call-ripple"></div>
+    </div>
+    <div class="call-name" id="callCharName">-</div>
+    <div class="call-status connecting" id="callStatus">呼叫中...</div>
+    <div class="call-wave" id="callWave">
+      <div class="call-wave-bar"></div>
+      <div class="call-wave-bar"></div>
+      <div class="call-wave-bar"></div>
+      <div class="call-wave-bar"></div>
+      <div class="call-wave-bar"></div>
+    </div>
+  </div>
+
+  <!-- 中部：字幕 -->
+  <div class="call-subtitle" id="callSubtitle">
+    <div id="callSubtitleText"></div>
+  </div>
+
+  <!-- 底部控制 -->
+  <div class="call-controls">
+    <!-- 按住说话 -->
+    <button class="call-ptt" id="callPttBtn"
+      ontouchstart="callPttStart(event)" ontouchend="callPttEnd(event)"
+      onmousedown="callPttStart(event)" onmouseup="callPttEnd(event)"
+      onmouseleave="callPttEnd(event)"
+    >🎤</button>
+    <div class="call-ptt-hint">按住说话</div>
+    <!-- 挂断行 -->
+    <div class="call-btn-row">
+      <button class="call-btn call-speaker" id="callSpeakerBtn" onclick="toggleCallSpeaker()" title="扬声器">🔊</button>
+      <button class="call-btn call-hangup" onclick="hangupCall()" title="挂断">📵</button>
+      <button class="call-btn call-speaker" id="callTextBtn" onclick="toggleCallText()" title="显示文字">💬</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ============================================================
 //  数据 & 状态
@@ -947,6 +1083,7 @@ let saves = LS.get('saves', []);
 let posts = LS.get('posts', []);
 let builtinAvatars = LS.get('builtinAvatars', {}); // 内置角色自定义头像 {charId: base64}
 let npcAvatars = LS.get('npcAvatars', {}); // 通讯录NPC自定义头像 {npcName: base64}
+let scriptCovers = LS.get('scriptCovers', {}); // 剧本自定义封面 {scriptId: base64}
 let myProfile = LS.get('myProfile', {name:'',gender:'',desc:''});
 
 // 游戏状态
@@ -1009,6 +1146,22 @@ function getAllScripts(){
   return [...BUILTIN_SCRIPTS.map(s=>({...s, custom:false})), ...customScripts.map(s=>({...s, custom:true}))];
 }
 
+// 获取剧本封面（优先自定义上传 > 原始封面）
+function getScriptCover(script){
+  if(!script) return {type:'emoji', value:'📖'};
+  const custom = scriptCovers[script.id];
+  if(custom) return {type:'img', value:custom, custom:true};
+  if(script.coverIsImg) return {type:'img', value:script.cover, custom:false};
+  return {type:'emoji', value:script.cover||'📖', custom:false};
+}
+
+// 生成剧本封面HTML
+function scriptCoverHtml(script, extraClass=''){
+  const c = getScriptCover(script);
+  if(c.type==='img') return `<img src="${esc(c.value)}" alt="${esc(script.title)}" class="${extraClass}">`;
+  return `<div class="placeholder-cover ${extraClass}">${c.value}</div>`;
+}
+
 const ALL_TAGS = ['全部','修仙','悬疑','恋爱','科幻','武侠','生存','奇幻','恐怖','冒险','搞笑','历史'];
 let activeTag = '全部';
 
@@ -1040,7 +1193,7 @@ function renderScripts(){
 
   c.innerHTML = list.map(s=>`
     <div class="card script-card" onclick="startGame('${s.id}')">
-      <div class="cover">${s.coverIsImg?`<img src="${esc(s.cover)}" alt="${esc(s.title)}">`:(s.cover?`<div class="placeholder-cover">${s.cover}</div>`:'')}</div>
+      <div class="cover" style="position:relative;">${scriptCoverHtml(s)}<div class="cover-change-btn" onclick="event.stopPropagation();changeScriptCover('${s.id}')" title="更换封面">📷</div></div>
       <div class="info">
         <h4>${esc(s.title)}</h4>
         <div class="tags">
@@ -1057,14 +1210,82 @@ function renderScripts(){
   `).join('');
 }
 
+// 更换内置剧本封面
+function changeScriptCover(scriptId){
+  const script = getScriptById(scriptId);
+  if(!script) return;
+  const hasCustom = !!scriptCovers[scriptId];
+  const coverInfo = getScriptCover(script);
+  
+  showModal('📷 更换封面 - ' + script.title, `
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div class="cover-upload-preview" id="scriptCoverChangePreview" onclick="document.getElementById('scriptCoverChangeInput').click()" title="点击上传新封面" style="width:80px;height:108px;">
+          ${coverInfo.type==='img'?`<img src="${esc(coverInfo.value)}" alt="封面">`:`<span>${coverInfo.value}</span>`}
+          <div class="upload-hint">点击上传</div>
+        </div>
+        <input type="file" id="scriptCoverChangeInput" accept="image/*" style="display:none;" onchange="onScriptCoverChange(this)">
+        <div style="flex:1;">
+          <div style="font-size:0.85rem;margin-bottom:8px;">点击左侧封面可上传新图片</div>
+          <div style="font-size:0.75rem;color:var(--text3);line-height:1.5;">支持 JPG/PNG/WebP，建议比例 3:4<br>图片将保存在本地，不会上传服务器</div>
+          ${hasCustom?`<button class="btn btn-sm btn-danger" style="margin-top:8px;" onclick="removeScriptCover('${scriptId}')">🗑 恢复默认封面</button>`:''}
+        </div>
+      </div>
+    </div>
+  `, ()=>{
+    // 确认：如果预览区有新图片，保存
+    const preview = document.getElementById('scriptCoverChangePreview');
+    const img = preview?.querySelector('img');
+    if(img && img.src && img.src.startsWith('data:')){
+      scriptCovers[scriptId] = img.src;
+      LS.set('scriptCovers', scriptCovers);
+      renderScripts();
+      toast('封面已更新');
+    }
+  }, true);
+}
+
+function onScriptCoverChange(input){
+  const file = input.files[0];
+  if(!file) return;
+  if(file.size > 5*1024*1024){toast('图片不能超过5MB');return;}
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const base64 = e.target.result;
+    const preview = document.getElementById('scriptCoverChangePreview');
+    if(!preview) return;
+    const emojiSpan = preview.querySelector('span');
+    if(emojiSpan) emojiSpan.style.display = 'none';
+    const hint = preview.querySelector('.upload-hint');
+    if(hint) hint.style.display = 'none';
+    let img = preview.querySelector('img');
+    if(!img){img = document.createElement('img');preview.appendChild(img);}
+    img.src = base64;
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeScriptCover(scriptId){
+  delete scriptCovers[scriptId];
+  LS.set('scriptCovers', scriptCovers);
+  closeModal();
+  renderScripts();
+  toast('已恢复默认封面');
+}
+
 // 创建/编辑剧本
 let _generatedAttrConfig = null;
 
 function showCreateScript(editId){
   window._pendingScriptCover = null;
   const existing = editId ? customScripts.find(s=>s.id===editId) : null;
-  // 编辑模式下，若原来有图片封面，先填入pending
-  if(existing && existing.coverIsImg) window._pendingScriptCover = existing.cover;
+  // 编辑模式下，若原来有图片封面或自定义封面，先填入pending
+  if(existing){
+    const _cc = scriptCovers[existing.id];
+    if(_cc) window._pendingScriptCover = _cc;
+    else if(existing.coverIsImg) window._pendingScriptCover = existing.cover;
+  }
   const title = existing ? '编辑剧本' : '创建自定义剧本';
   _generatedAttrConfig = existing?.attrConfig || null;
 
@@ -1087,8 +1308,8 @@ function showCreateScript(editId){
         <label style="font-size:0.82rem;color:var(--text2);margin-bottom:8px;display:block;">剧本封面</label>
         <div style="display:flex;align-items:center;gap:14px;">
           <div class="cover-upload-preview" id="scriptCoverPreview" onclick="triggerImgUpload('scriptCoverInput','scriptCoverPreview','rect')" title="点击上传封面">
-            <span id="scriptCoverEmoji">${existing&&existing.coverIsImg?'':esc(existing?existing.cover||'📖':'📖')}</span>
-            ${existing&&existing.coverIsImg?'<img src="'+esc(existing.cover)+'" alt="封面">':''}
+            <span id="scriptCoverEmoji">${existing&&existing.coverIsImg&&!(scriptCovers[existing.id])?'':esc(existing?existing.cover||'📖':'📖')}</span>
+            ${existing&&(existing.coverIsImg||scriptCovers[existing.id])?'<img src="'+esc(scriptCovers[existing.id]||existing.cover)+'" alt="封面">':''}
             <div class="upload-hint">点击上传</div>
           </div>
           <input type="file" id="scriptCoverInput" accept="image/*" style="display:none;" onchange="onImgUpload(this,'scriptCoverPreview','rect','_pendingScriptCover')">
@@ -1157,6 +1378,14 @@ function showCreateScript(editId){
       attrConfig: _generatedAttrConfig || null
     };
     window._pendingScriptCover = null;
+    // 同步自定义封面到 scriptCovers
+    if(data.coverIsImg){
+      scriptCovers[data.id] = data.cover;
+      LS.set('scriptCovers', scriptCovers);
+    }else if(scriptCovers[data.id]){
+      delete scriptCovers[data.id];
+      LS.set('scriptCovers', scriptCovers);
+    }
     if(existing){
       const idx=customScripts.findIndex(s=>s.id===existing.id);
       if(idx>=0)customScripts[idx]=data;
@@ -1470,9 +1699,10 @@ function showCharCreate(scriptId){
   }
 
   // 构建剧本banner
-  const coverHtml = script.coverIsImg
-    ? `<img src="${esc(script.cover)}" alt="${esc(script.title)}">`
-    : (script.cover ? script.cover : '📖');
+  const _sc = getScriptCover(script);
+  const coverHtml = _sc.type==='img'
+    ? `<img src="${esc(_sc.value)}" alt="${esc(script.title)}">`
+    : (_sc.value || '📖');
 
   document.getElementById('charCreateBody').innerHTML = `
     <div class="script-banner">
@@ -3505,7 +3735,7 @@ function renderSaves(){
   c.innerHTML = saves.map((s,i)=>`
     <div class="card save-slot">
       <div class="slot-info">
-        <div class="slot-icon">${getScriptById(s.scriptId)?.coverIsImg?`<img src="${esc(getScriptById(s.scriptId)?.cover)}" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-sm);">`:(getScriptById(s.scriptId)?.cover||'💾')}</div>
+        <div class="slot-icon">${(()=>{const _s=getScriptById(s.scriptId);const _c=getScriptCover(_s);return _c.type==='img'?`<img src="${esc(_c.value)}" style="width:100%;height:100%;object-fit:cover;border-radius:var(--radius-sm);">`:(_c.value||'💾');})()}</div>
         <div class="slot-text">
           <h4>存档 ${i+1} - ${esc(s.title)}</h4>
           <p>${s.savedAt} · 回合 ${s.turnCount||0}</p>
@@ -3627,6 +3857,7 @@ function showCharDetail(charId){
       ${ch.bg?`<div class="char-section"><h4>背景</h4><p>${esc(ch.bg)}</p></div>`:''}
       <div class="char-actions">
         <button class="btn btn-primary" onclick="startCharChat('${ch.id}')">💬 聊天</button>
+        <button class="btn" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;" onclick="startCall('${ch.id}')">📞 打电话</button>
         ${canDelete?`<button class="btn btn-danger" onclick="deleteChar('${ch.id}')">删除</button>`:''}
       </div>
     </div>
@@ -3802,6 +4033,307 @@ function sendCharMsg(){
 function exitCharChat(){
   document.getElementById('charChatScreen').style.display='none';
   window._charChatState=null;
+}
+
+// ============================================================
+//  语音通话系统
+// ============================================================
+const callState = {
+  active: false,
+  charId: null,
+  charName: '',
+  systemPrompt: '',
+  messages: [],       // 通话历史
+  timer: null,        // 计时器
+  seconds: 0,
+  recognition: null,  // SpeechRecognition实例
+  isPressing: false,  // 是否正在按住说话
+  isSpeaking: false,  // AI是否在说话
+  ttsEnabled: true,   // TTS朗读开关
+  showText: false,    // 字幕显示
+  currentUtterance: null,
+};
+
+function startCall(charId){
+  closeModal();
+  const ch = getAllChars().find(c=>c.id===charId);
+  if(!ch) return;
+  if(!settings.apiUrl||!settings.apiKey){ showSettings('请先配置API'); return; }
+
+  // 检查SpeechRecognition支持
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){
+    toast('⚠️ 你的浏览器不支持语音识别，请使用Chrome/Edge/Safari');
+    return;
+  }
+
+  // 初始化通话状态
+  callState.active = true;
+  callState.charId = charId;
+  callState.charName = ch.name;
+  callState.messages = [];
+  callState.seconds = 0;
+  callState.isSpeaking = false;
+  callState.isPressing = false;
+  callState.showText = false;
+
+  // 构建系统提示（通话风格：简短口语化）
+  const profileInfo = myProfile.name ? `对方是${myProfile.name}${myProfile.gender?'('+myProfile.gender+')':''}。` : '';
+  callState.systemPrompt = `你现在正在和玩家进行真实的语音电话通话，你扮演"${ch.name}"这个角色。
+${ch.gender?'性别：'+ch.gender+'。':''}${ch.age?'年龄：'+ch.age+'岁。':''}${ch.personality?'性格：'+ch.personality+'。':''}${ch.desc?'简介：'+ch.desc+'。':''}${ch.bg?'背景：'+ch.bg+'。':''}
+${profileInfo}
+通话规则：
+1. 用口语化、自然的语气说话，像真实打电话一样
+2. 每次回复【15-40字】，简短有力，不要太长
+3. 不要用*动作描写*，直接说话
+4. 保持角色个性，情绪自然流露
+5. 可以有语气词，如"嗯"、"哦"、"呀"、"哎"等`;
+
+  // 更新UI
+  const callScreen = document.getElementById('callScreen');
+  document.getElementById('callCharName').textContent = ch.name;
+  document.getElementById('callStatus').textContent = '呼叫中...';
+  document.getElementById('callStatus').className = 'call-status connecting';
+  document.getElementById('callWave').className = 'call-wave';
+  document.getElementById('callSubtitle').className = 'call-subtitle';
+  document.getElementById('callSubtitleText').innerHTML = '';
+  document.getElementById('callPttBtn').disabled = true;
+
+  // 头像
+  const avatarSrc = getCharAvatar(ch);
+  const avatarEl = document.getElementById('callAvatarDisplay');
+  if(avatarSrc){
+    avatarEl.className = '';
+    avatarEl.style.cssText = 'width:120px;height:120px;border-radius:50%;overflow:hidden;border:3px solid rgba(255,255,255,0.15);box-shadow:0 0 40px rgba(139,92,246,0.4);';
+    avatarEl.innerHTML = `<img src="${esc(avatarSrc)}" style="width:100%;height:100%;object-fit:cover;">`;
+  } else {
+    avatarEl.className = 'call-avatar-text';
+    avatarEl.style.cssText = '';
+    avatarEl.textContent = ch.emoji||'👤';
+  }
+
+  callScreen.classList.add('active');
+
+  // 呼叫动画 1.5秒后"接通"，AI先说话
+  setTimeout(()=>{
+    if(!callState.active) return;
+    document.getElementById('callStatus').textContent = '通话中 00:00';
+    document.getElementById('callStatus').className = 'call-status';
+    document.getElementById('callPttBtn').disabled = false;
+
+    // 启动计时器
+    callState.timer = setInterval(()=>{
+      callState.seconds++;
+      const m = String(Math.floor(callState.seconds/60)).padStart(2,'0');
+      const s = String(callState.seconds%60).padStart(2,'0');
+      const statusEl = document.getElementById('callStatus');
+      if(statusEl && !callState.isSpeaking) statusEl.textContent = `通话中 ${m}:${s}`;
+    }, 1000);
+
+    // AI接通后主动打招呼
+    callAIReply('（接通了，你主动打招呼）');
+  }, 1800);
+}
+
+// AI回复（通话版）
+async function callAIReply(userText){
+  if(!callState.active) return;
+  callState.isSpeaking = true;
+  setCallStatus('AI思考中...', '');
+  document.getElementById('callPttBtn').disabled = true;
+
+  try{
+    let apiUrl = settings.apiUrl.trim();
+    if(apiUrl.endsWith('/')) apiUrl=apiUrl.slice(0,-1);
+    if(!apiUrl.endsWith('/chat/completions')) apiUrl+='/chat/completions';
+
+    const msgs = [
+      {role:'system', content:callState.systemPrompt},
+      ...callState.messages.slice(-12),
+      {role:'user', content:userText}
+    ];
+
+    const resp = await fetch(apiUrl,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+settings.apiKey},
+      body:JSON.stringify({ model:settings.model||'deepseek-chat', messages:msgs, stream:false, max_tokens:120, temperature:0.95 }),
+      signal:AbortSignal.timeout(30000)
+    });
+
+    if(!resp.ok){ callReplyError('网络错误 '+resp.status); return; }
+    const data = await resp.json();
+    let text = data.choices?.[0]?.message?.content || '';
+    if(!text){ callReplyError('空回复'); return; }
+
+    // 清理多余标点
+    text = text.replace(/\*[^*]+\*/g,'').trim();
+
+    callState.messages.push({role:'user', content:userText});
+    callState.messages.push({role:'assistant', content:text});
+
+    // 显示字幕
+    if(callState.showText){
+      showCallSubtitle('ai', text);
+    }
+
+    // TTS朗读
+    await callTTS(text);
+  }catch(err){
+    callReplyError(err.message);
+  }finally{
+    callState.isSpeaking = false;
+    if(callState.active){
+      document.getElementById('callPttBtn').disabled = false;
+      setCallStatus(null, '');
+      document.getElementById('callWave').className = 'call-wave';
+    }
+  }
+}
+
+// TTS 朗读
+function callTTS(text){
+  return new Promise(resolve=>{
+    if(!callState.ttsEnabled || !window.speechSynthesis){ resolve(); return; }
+    window.speechSynthesis.cancel();
+    setCallStatus('TA在说话...', 'speaking-ai');
+    document.getElementById('callWave').className = 'call-wave show';
+
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'zh-CN';
+    utter.rate = 1.05;
+    utter.pitch = 1.1;
+    // 尝试找到中文女声
+    const voices = speechSynthesis.getVoices();
+    const zhVoice = voices.find(v=>v.lang.startsWith('zh')&&v.name.includes('Female'))
+      || voices.find(v=>v.lang.startsWith('zh'));
+    if(zhVoice) utter.voice = zhVoice;
+
+    callState.currentUtterance = utter;
+    utter.onend = ()=>{ callState.currentUtterance=null; resolve(); };
+    utter.onerror = ()=>{ callState.currentUtterance=null; resolve(); };
+    speechSynthesis.speak(utter);
+  });
+}
+
+// PTT 按住说话
+let _callRecognition = null;
+function callPttStart(e){
+  e.preventDefault();
+  if(!callState.active || callState.isPressing || callState.isSpeaking) return;
+  callState.isPressing = true;
+
+  // 停止TTS
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+  document.getElementById('callPttBtn').classList.add('pressing');
+  setCallStatus('🎤 正在录音...', 'listening');
+  document.getElementById('callWave').className = 'call-wave';
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR) return;
+  _callRecognition = new SR();
+  _callRecognition.lang = 'zh-CN';
+  _callRecognition.interimResults = false;
+  _callRecognition.maxAlternatives = 1;
+  _callRecognition.continuous = false;
+
+  let finalText = '';
+  _callRecognition.onresult = (ev)=>{
+    finalText = ev.results[0][0].transcript.trim();
+    if(callState.showText) showCallSubtitle('user', finalText);
+  };
+  _callRecognition.onerror = ()=>{};
+  _callRecognition.onend = ()=>{
+    if(callState.isPressing){
+      callState.isPressing = false;
+      document.getElementById('callPttBtn').classList.remove('pressing');
+      if(finalText){
+        callAIReply(finalText);
+      } else {
+        setCallStatus(null,'');
+        toast('没有听清楚，请重新说');
+      }
+    }
+  };
+  try{ _callRecognition.start(); }catch(e){}
+}
+
+function callPttEnd(e){
+  e.preventDefault();
+  if(!callState.isPressing) return;
+  callState.isPressing = false;
+  document.getElementById('callPttBtn').classList.remove('pressing');
+  if(_callRecognition){
+    try{ _callRecognition.stop(); }catch(e){}
+    _callRecognition = null;
+  }
+}
+
+// 挂断
+function hangupCall(){
+  callState.active = false;
+  if(callState.timer){ clearInterval(callState.timer); callState.timer=null; }
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+  if(_callRecognition){ try{_callRecognition.stop();}catch(e){} _callRecognition=null; }
+  document.getElementById('callScreen').classList.remove('active');
+  callState.messages = [];
+}
+
+// 扬声器开关（实际控制TTS）
+function toggleCallSpeaker(){
+  callState.ttsEnabled = !callState.ttsEnabled;
+  const btn = document.getElementById('callSpeakerBtn');
+  if(callState.ttsEnabled){
+    btn.textContent='🔊'; btn.classList.remove('muted');
+    toast('扬声器已开启');
+  } else {
+    btn.textContent='🔇'; btn.classList.add('muted');
+    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    toast('已静音（仅看字幕）');
+  }
+}
+
+// 字幕开关
+function toggleCallText(){
+  callState.showText = !callState.showText;
+  const btn = document.getElementById('callTextBtn');
+  const sub = document.getElementById('callSubtitle');
+  if(callState.showText){
+    btn.style.opacity='1';
+    sub.className='call-subtitle show';
+    toast('字幕已开启');
+  } else {
+    btn.style.opacity='0.4';
+    sub.className='call-subtitle';
+    toast('字幕已关闭');
+  }
+}
+
+function showCallSubtitle(role, text){
+  const el = document.getElementById('callSubtitleText');
+  if(!el) return;
+  if(role==='user'){
+    el.innerHTML = `<div class="call-subtitle-user">你：${esc(text)}</div>`
+      + (el.querySelector('.call-subtitle-ai')?.outerHTML||'');
+  } else {
+    const userPart = el.querySelector('.call-subtitle-user')?.outerHTML||'';
+    el.innerHTML = userPart + `<div class="call-subtitle-ai">${esc(callState.charName)}：${esc(text)}</div>`;
+  }
+}
+
+function setCallStatus(text, cls){
+  const el = document.getElementById('callStatus');
+  if(!el) return;
+  if(text) el.textContent = text;
+  el.className = 'call-status' + (cls?' '+cls:'');
+}
+
+function callReplyError(msg){
+  callState.isSpeaking = false;
+  if(callState.active){
+    document.getElementById('callPttBtn').disabled=false;
+    setCallStatus(null,'');
+    toast('⚠️ '+msg);
+  }
 }
 
 function showCreateChar(){
@@ -4406,13 +4938,50 @@ function findPresetPlatform(url, model){
 }
 
 // 紧凑二进制编码 → Base62（大小写+数字，比Base36更紧凑）
-// 码结构（预设平台）：
-//   [1字节=平台编号+hex标记] [1字节=key字节长度] [N字节=key] [2字节=回合数]
-// 码结构（自定义平台）：
-//   [1字节=0x89或9] [1字节=url长度] [N字节=url] [1字节=model长度] [N字节=model] [N字节=key] [2字节=回合数]
-// 前缀 NC
+// 码结构 v2（前缀 NC2）：
+//   [payload] + [4字节nonce随机数] + [4字节签名(HMAC截断)]
+//   payload（预设平台）：[1字节=平台编号+hex标记] [1字节=key字节长度] [N字节=key] [2字节=回合数]
+//   payload（自定义平台）：[1字节=0x89或9] [1字节=url长度] [url] [1字节=model长度] [model] [key] [2字节=回合数]
+// 旧格式（前缀 NC）仍可解码，但无签名验证
+// nonce用途：每次生成保证唯一，同时作为已用码的全局唯一ID
+// 签名：SimpleHMAC(payload+nonce, ADMIN_PWD_HASH)的前4字节，防伪造
+
+// 管理员签名密钥（用于防止玩家伪造兑换码）
+const CODE_SIGN_KEY = 'nichuang_admin_2024';
 
 const B62_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+// ===== 简单签名（防伪造，非加密级别，但足够阻止普通玩家） =====
+// 对bytes做滚动哈希，输出4字节
+function simpleHash4(bytes, keyStr){
+  const keyBytes = new TextEncoder().encode(keyStr);
+  let h = [0x6B9B0A3D, 0x4F7C2E91, 0xD3A15B78, 0x2C84E06F];
+  for(let i = 0; i < bytes.length; i++){
+    const b = bytes[i] ^ keyBytes[i % keyBytes.length];
+    h[0] = ((h[0] << 5) | (h[0] >>> 27)) ^ (b * 0x9E3779B9 | 0);
+    h[1] = ((h[1] << 13) | (h[1] >>> 19)) ^ ((b + h[0]) | 0);
+    h[2] = ((h[2] << 7) | (h[2] >>> 25)) ^ ((h[1] ^ 0xBEEFCAFE) | 0);
+    h[3] = ((h[3] << 11) | (h[3] >>> 21)) ^ ((h[2] + b) | 0);
+  }
+  // 最终混合
+  h[0] = (h[0] ^ h[3] ^ 0xDEADBEEF) | 0;
+  h[1] = (h[1] ^ h[0] ^ 0xCAFEBABE) | 0;
+  h[2] = (h[2] ^ h[1] ^ 0xFACEB00C) | 0;
+  h[3] = (h[3] ^ h[2] ^ 0x0BADF00D) | 0;
+  return new Uint8Array([h[0] & 0xFF, h[1] & 0xFF, h[2] & 0xFF, h[3] & 0xFF]);
+}
+
+// 生成4字节随机nonce
+function randomNonce4(){
+  const arr = new Uint8Array(4);
+  crypto.getRandomValues(arr);
+  return arr;
+}
+
+// nonce转hex字符串（作为已用码ID）
+function nonceToHex(nonce4Bytes){
+  return Array.from(nonce4Bytes).map(b => b.toString(16).padStart(2,'0')).join('');
+}
 
 function bytesToB62(bytes){
   if(!bytes.length) return '0';
@@ -4519,78 +5088,147 @@ function encodeRedeemCode(data){
     payloadBytes[offset++] = turns & 0xFF;
   }
 
-  const encoded = bytesToB62(payloadBytes);
-  return 'NC' + encoded;
+  // v2: 在payload末尾加 4字节nonce + 4字节签名
+  // 注意：在整个finalBytes最前面加1字节版本标记(0xA2)，防止b62编码丢失前导0字节
+  const nonce = randomNonce4();
+  const payloadWithNonce = new Uint8Array(payloadBytes.length + 4);
+  payloadWithNonce.set(payloadBytes);
+  payloadWithNonce.set(nonce, payloadBytes.length);
+  const sig = simpleHash4(payloadWithNonce, CODE_SIGN_KEY);
+  // 组装：[0xA2版本字节][payload][nonce4][sig4]
+  const finalBytes = new Uint8Array(1 + payloadWithNonce.length + 4);
+  finalBytes[0] = 0xA2; // 版本标记，保证第一字节非0，防b62前导0丢失
+  finalBytes.set(payloadWithNonce, 1);
+  finalBytes.set(sig, 1 + payloadWithNonce.length);
+
+  const encoded = bytesToB62(finalBytes);
+  return 'NC2' + encoded; // v2 前缀，区分旧格式
 }
 
 // 自定义平台超长时的fallback
 function encodeRedeemCodeFallback(data){
   const payload = JSON.stringify({p:9, u:data.apiUrl, k:data.apiKey, m:data.model, t:Math.min(data.turns,9999)});
-  const bytes = new TextEncoder().encode(payload);
-  const encoded = bytesToB62(bytes);
-  return 'NC' + encoded;
+  const payloadBytes = new TextEncoder().encode(payload);
+  // 同样加nonce+签名，加0xA2前导字节防b62前导0丢失
+  const nonce = randomNonce4();
+  const payloadWithNonce = new Uint8Array(payloadBytes.length + 4);
+  payloadWithNonce.set(payloadBytes);
+  payloadWithNonce.set(nonce, payloadBytes.length);
+  const sig = simpleHash4(payloadWithNonce, CODE_SIGN_KEY);
+  const finalBytes = new Uint8Array(1 + payloadWithNonce.length + 4);
+  finalBytes[0] = 0xA2; // 版本标记
+  finalBytes.set(payloadWithNonce, 1);
+  finalBytes.set(sig, 1 + payloadWithNonce.length);
+  const encoded = bytesToB62(finalBytes);
+  return 'NC2' + encoded;
 }
 
 function decodeRedeemCode(code){
   try{
     const clean = code.trim().replace(/[-\s]/g, '');
-    if(!clean.toUpperCase().startsWith('NC')) return null;
-    const raw = clean.slice(2);
-    if(!raw) return null;
+    const upper = clean.toUpperCase();
 
-    const bytes = b62ToBytes(raw);
-    if(!bytes || bytes.length < 4) return null;
+    // v2格式：NC2前缀，带nonce+签名
+    if(upper.startsWith('NC2')){
+      const raw = clean.slice(3);
+      if(!raw) return null;
+      const allBytes = b62ToBytes(raw);
+      // 结构：[0xA2版本字节][payload][nonce4][sig4]，最少1+1+4+4=10字节
+      if(!allBytes || allBytes.length < 10) return null;
+      if(allBytes[0] !== 0xA2) return null; // 版本标记不符
 
-    const platformByte = bytes[0];
-    const isHex = (platformByte & 0x80) !== 0;
-    const platformId = platformByte & 0x7F;
+      // 去掉版本字节后拆分
+      const inner = allBytes.slice(1); // [payload][nonce4][sig4]
+      const sigOffset = inner.length - 4;
+      const nonceOffset = inner.length - 8;
+      const payloadWithNonce = inner.slice(0, sigOffset);
+      const noncePart = inner.slice(nonceOffset, sigOffset);
+      const sigExpected = inner.slice(sigOffset);
 
-    if(platformId < 9){
-      // 预设平台格式
-      const keyLen = bytes[1];
-      if(bytes.length < 2 + keyLen + 2) return null;
-      const keyBytes = bytes.slice(2, 2 + keyLen);
-      const apiKey = keyFromBytes(keyBytes, isHex);
-      const turns = (bytes[2 + keyLen] << 8) | bytes[2 + keyLen + 1];
-      const platform = PRESET_PLATFORMS[platformId];
-      return {
-        apiUrl: platform.url,
-        apiKey: apiKey,
-        model: platform.model,
-        turns: turns
-      };
+      // 验签
+      const sigActual = simpleHash4(payloadWithNonce, CODE_SIGN_KEY);
+      if(sigActual[0] !== sigExpected[0] || sigActual[1] !== sigExpected[1] ||
+         sigActual[2] !== sigExpected[2] || sigActual[3] !== sigExpected[3]){
+        return null; // 签名不符，拒绝（伪造或篡改）
+      }
+
+      // payload 是 payloadWithNonce 去掉末尾4字节nonce
+      const bytes = inner.slice(0, nonceOffset);
+      const nonceId = nonceToHex(noncePart); // 唯一码ID
+      const result = decodePayloadBytes(bytes);
+      if(result) result.nonceId = nonceId;
+      return result;
     }
 
-    if(platformId === 9){
-      // 自定义平台格式
-      let offset = 1;
-      const urlLen = bytes[offset++];
-      if(bytes.length < offset + urlLen) return null;
-      const apiUrl = new TextDecoder().decode(bytes.slice(offset, offset + urlLen));
-      offset += urlLen;
-      const modelLen = bytes[offset++];
-      if(bytes.length < offset + modelLen) return null;
-      const model = new TextDecoder().decode(bytes.slice(offset, offset + modelLen));
-      offset += modelLen;
-      // 剩余字节：key + 2字节turns
-      if(bytes.length < offset + 3) return null;
-      const keyEnd = bytes.length - 2;
-      const keyBytes = bytes.slice(offset, keyEnd);
-      const apiKey = keyFromBytes(keyBytes, isHex);
-      const turns = (bytes[keyEnd] << 8) | bytes[keyEnd + 1];
-      return {
-        apiUrl,
-        apiKey,
-        model,
-        turns
-      };
+    // 旧格式：NC前缀，无签名（兼容）
+    if(upper.startsWith('NC')){
+      const raw = clean.slice(2);
+      if(!raw) return null;
+      const bytes = b62ToBytes(raw);
+      if(!bytes || bytes.length < 4) return null;
+      // 旧格式没有nonce，用码的base62字符串的哈希作为ID
+      const result = decodePayloadBytes(bytes);
+      if(result) result.nonceId = 'legacy_' + raw.substring(0, 8).toUpperCase();
+      return result;
     }
 
-    // 未知格式，尝试 JSON fallback
-    return tryDecodeJsonFallback(bytes);
+    return null;
   }catch(e){
     return tryDecodeLegacyCode(code);
   }
+}
+
+// 解析payload字节（v1/v2共用）
+function decodePayloadBytes(bytes){
+  if(!bytes || bytes.length < 4) return null;
+
+  const platformByte = bytes[0];
+  const isHex = (platformByte & 0x80) !== 0;
+  const platformId = platformByte & 0x7F;
+
+  if(platformId < 9){
+    // 预设平台格式
+    const keyLen = bytes[1];
+    if(bytes.length < 2 + keyLen + 2) return null;
+    const keyBytes = bytes.slice(2, 2 + keyLen);
+    const apiKey = keyFromBytes(keyBytes, isHex);
+    const turns = (bytes[2 + keyLen] << 8) | bytes[2 + keyLen + 1];
+    const platform = PRESET_PLATFORMS[platformId];
+    return {
+      apiUrl: platform.url,
+      apiKey: apiKey,
+      model: platform.model,
+      turns: turns
+    };
+  }
+
+  if(platformId === 9){
+    // 自定义平台格式
+    let offset = 1;
+    const urlLen = bytes[offset++];
+    if(bytes.length < offset + urlLen) return null;
+    const apiUrl = new TextDecoder().decode(bytes.slice(offset, offset + urlLen));
+    offset += urlLen;
+    const modelLen = bytes[offset++];
+    if(bytes.length < offset + modelLen) return null;
+    const model = new TextDecoder().decode(bytes.slice(offset, offset + modelLen));
+    offset += modelLen;
+    // 剩余字节：key + 2字节turns
+    if(bytes.length < offset + 3) return null;
+    const keyEnd = bytes.length - 2;
+    const keyBytes = bytes.slice(offset, keyEnd);
+    const apiKey = keyFromBytes(keyBytes, isHex);
+    const turns = (bytes[keyEnd] << 8) | bytes[keyEnd + 1];
+    return {
+      apiUrl,
+      apiKey,
+      model,
+      turns
+    };
+  }
+
+  // 未知格式，尝试 JSON fallback
+  return tryDecodeJsonFallback(bytes);
 }
 
 // JSON fallback解码
@@ -4764,9 +5402,9 @@ function activateRedeemCode(code){
     return;
   }
 
-  // 检查兑换码是否已被使用（一次性）
-  const normalizedCode = code.trim().replace(/[-\s]/g, '').toUpperCase();
-  if(usedRedeemCodes.includes(normalizedCode)){
+  // 检查兑换码是否已被使用（基于nonce唯一ID，一次性）
+  const nonceId = data.nonceId || ('raw_' + code.trim().replace(/[-\s]/g,'').toUpperCase().substring(0,12));
+  if(usedRedeemCodes.includes(nonceId)){
     toast('⚠️ 此兑换码已被使用过，每个码只能激活一次');
     return;
   }
@@ -4774,6 +5412,7 @@ function activateRedeemCode(code){
   // 写入redeemState
   redeemState = {
     code,
+    nonceId,
     apiUrl: data.apiUrl,
     apiKey: data.apiKey,
     model: data.model || 'deepseek-chat',
@@ -4783,8 +5422,8 @@ function activateRedeemCode(code){
   };
   LS.set('redeemState', redeemState);
 
-  // 标记兑换码为已使用（一次性）
-  usedRedeemCodes.push(normalizedCode);
+  // 标记兑换码为已使用（以nonceId存储，永久不可再用）
+  usedRedeemCodes.push(nonceId);
   LS.set('usedRedeemCodes', usedRedeemCodes);
 
   // 同步到settings（这样所有API调用都能用）
@@ -5040,8 +5679,11 @@ function generateRedeemCode(){
   for(let i=0;i<count;i++){
     const code = encodeRedeemCode({apiUrl, apiKey, model, turns});
     _lastBatchCodes.push(code);
+    // 解码提取nonceId（唯一指纹）
+    const decoded = decodeRedeemCode(code);
+    const nonceId = decoded?.nonceId || '—';
     // 保存到管理员列表
-    adminCodes.unshift({code, apiUrl, apiKey: apiKey.substring(0,8)+'...', model, turns, createdAt: new Date().toLocaleString('zh-CN')});
+    adminCodes.unshift({code, nonceId, apiUrl, apiKey: apiKey.substring(0,8)+'...', model, turns, createdAt: new Date().toLocaleString('zh-CN')});
   }
   if(adminCodes.length > 500) adminCodes = adminCodes.slice(0,500);
   LS.set('adminCodes', adminCodes);
@@ -5108,13 +5750,19 @@ function fallbackCopyText(text){
 function refreshAdminCodeList(){
   const listEl = document.getElementById('adm_code_list');
   if(!listEl) return;
-  listEl.innerHTML = adminCodes.map((c,i) => `
+  listEl.innerHTML = adminCodes.map((c,i) => {
+    const isUsed = c.nonceId && usedRedeemCodes.includes(c.nonceId);
+    const usedBadge = isUsed
+      ? `<span style="font-size:0.62rem;background:rgba(255,80,80,0.2);color:#ff6b6b;padding:2px 5px;border-radius:4px;margin-left:4px;">已使用</span>`
+      : `<span style="font-size:0.62rem;background:rgba(100,255,150,0.15);color:#6bffa0;padding:2px 5px;border-radius:4px;margin-left:4px;">未使用</span>`;
+    return `
     <div class="code-item">
-      <div class="ci-code" style="font-size:0.92rem;letter-spacing:1px;" onclick="copyCode('${esc(c.code)}')" title="点击复制">${esc(c.code)}</div>
+      <div class="ci-code" style="font-size:0.88rem;letter-spacing:1px;" onclick="copyCode('${esc(c.code)}')" title="点击复制">${esc(c.code)}${usedBadge}</div>
       <div class="ci-turns">${c.turns}回合</div>
       <button class="ci-del" onclick="deleteAdminCode(${i})" title="删除">✕</button>
     </div>
-  `).join('') || '<p style="font-size:0.78rem;color:var(--text3);">暂无生成的兑换码</p>';
+  `;
+  }).join('') || '<p style="font-size:0.78rem;color:var(--text3);">暂无生成的兑换码</p>';
 }
 
 let _lastGeneratedCode = '';

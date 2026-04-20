@@ -1,4 +1,4 @@
-name: 自动部署后端服务
+name: 自动部署后端服务（Deepseek 极简版）
 on:
   push:
     branches: [ main ]
@@ -14,10 +14,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: 启动服务器
         run: node 服务器.js
         env:
-          # 改成 Deepseek 的密钥
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

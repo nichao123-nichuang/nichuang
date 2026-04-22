@@ -936,12 +936,43 @@ async function getAvatar(avatarType, targetName, localStorageKey) {
 // 统一头像保存（后端 + 本地双写）
 async function saveAvatar(avatarType, targetName, imageData, localStorageKey) {
   // 1. 保存到后端
-  await saveAvatarToBackend(avatarType, targetName, imageData);
+  const backendOk = await saveAvatarToBackend(avatarType, targetName, imageData);
 
   // 2. 同时保存本地备份
   const localData = LS.get(localStorageKey, {});
   localData[targetName] = imageData;
   LS.set(localStorageKey, localData);
+
+  // 3. 强制刷新对应组件的UI显示
+  refreshAvatarUI(avatarType, targetName, imageData);
+
+  return backendOk;
+}
+
+// 根据类型刷新对应UI
+function refreshAvatarUI(avatarType, targetName, imageData) {
+  switch(avatarType) {
+    case 'npc':
+      // 刷新NPC通讯录和聊天界面
+      if (window._phoneChatState && window._phoneChatState.npcName === targetName) {
+        window._phoneChatState.npcAvatarSrc = imageData;
+        const state = gameState.npcContacts?.find(n => n.name === targetName);
+        if (state) {
+          npcAvatars[targetName] = imageData;
+          updatePhoneChatHeaderAvatar(state);
+        }
+      }
+      renderPhoneContacts();
+      break;
+    case 'character':
+      // 刷新角色列表和详情
+      renderCharContent();
+      break;
+    case 'script':
+      // 刷新剧本列表封面
+      renderScripts();
+      break;
+  }
 }
 
 // 删除头像
@@ -1249,6 +1280,57 @@ function init(){
   if(!LS.get('disclaimerAccepted')){
     showDisclaimer();
   }
+
+  // 页面可见性变化时刷新头像（从后端拉取最新数据）
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      // 页面重新可见时，刷新头像数据
+      refreshAllAvatars();
+    }
+  });
+}
+
+// 刷新所有头像（从后端拉取最新数据）
+async function refreshAllAvatars() {
+  // 刷新NPC头像
+  if (gameState?.npcContacts) {
+    for (const npc of gameState.npcContacts) {
+      if (npc.name) {
+        const backendAvatar = await getAvatar('npc', npc.name, 'npcAvatars');
+        if (backendAvatar && backendAvatar !== npcAvatars[npc.name]) {
+          npcAvatars[npc.name] = backendAvatar;
+        }
+      }
+    }
+    renderPhoneContacts();
+  }
+
+  // 刷新剧本封面
+  const scriptIds = Object.keys(scriptCovers);
+  for (const scriptId of scriptIds) {
+    const backendCover = await getAvatar('script', scriptId, 'scriptCovers');
+    if (backendCover && backendCover !== scriptCovers[scriptId]) {
+      scriptCovers[scriptId] = backendCover;
+    }
+  }
+  renderScripts();
+
+  // 刷新角色头像
+  const allChars = [...builtinChars, ...myChars];
+  for (const ch of allChars) {
+    if (ch.id) {
+      const backendAvatar = await getAvatar('character', ch.id, 'builtinAvatars');
+      if (backendAvatar && backendAvatar !== (ch.avatar || builtinAvatars[ch.id])) {
+        if (myChars.find(c => c.id === ch.id)) {
+          const idx = myChars.findIndex(c => c.id === ch.id);
+          if (idx >= 0) myChars[idx].avatar = backendAvatar;
+        } else {
+          builtinAvatars[ch.id] = backendAvatar;
+        }
+      }
+    }
+  }
+  renderCharContent();
 }
 
 // ============================================================
@@ -1280,6 +1362,96 @@ function switchPage(p){
 // ============================================================
 //  剧本系统
 // ============================================================
+
+// 后端共享剧本列表
+let sharedScripts = [];
+
+// 剧本后端存储API
+async function saveScriptToBackend(script) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (sessionToken) headers['X-Session-Token'] = sessionToken;
+    else if (userId) headers['X-Device-Id'] = userId;
+
+    const resp = await fetch(API_BASE + '/api/script', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        id: script.id,
+        title: script.title,
+        description: script.desc,
+        tag: script.tag,
+        startMsg: script.startMsg,
+        quickActions: script.quickActions,
+        attrConfig: script.attrConfig,
+        authorName: myProfile.name || '匿名作者'
+      })
+    });
+    const data = await resp.json();
+    return data;
+  } catch (e) {
+    console.warn('后端剧本存储失败:', e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+// 从后端获取剧本列表
+async function fetchScriptsFromBackend() {
+  try {
+    const headers = {};
+    if (sessionToken) headers['X-Session-Token'] = sessionToken;
+    else if (userId) headers['X-Device-Id'] = userId;
+
+    const resp = await fetch(API_BASE + '/api/scripts', { headers });
+    const data = await resp.json();
+    return data.success ? data.scripts : [];
+  } catch (e) {
+    console.warn('后端剧本获取失败:', e.message);
+    return [];
+  }
+}
+
+// 从后端获取单个剧本
+async function fetchScriptFromBackend(id) {
+  try {
+    const headers = {};
+    if (sessionToken) headers['X-Session-Token'] = sessionToken;
+    else if (userId) headers['X-Device-Id'] = userId;
+
+    const resp = await fetch(API_BASE + '/api/script/' + id, { headers });
+    const data = await resp.json();
+    return data.success ? data.script : null;
+  } catch (e) {
+    console.warn('后端剧本详情获取失败:', e.message);
+    return null;
+  }
+}
+
+// 加载共享剧本（从后端获取已通过的剧本）
+async function loadSharedScripts() {
+  const backendScripts = await fetchScriptsFromBackend();
+
+  // 转换为本地格式
+  return backendScripts.map(s => ({
+    id: s.id,
+    title: s.title,
+    desc: s.description || '',
+    tag: s.tag || '冒险',
+    cover: s.cover || '📖',
+    coverIsImg: false,
+    systemPrompt: '',
+    startMsg: s.start_msg || '',
+    quickActions: typeof s.quick_actions === 'string' ? JSON.parse(s.quick_actions) : (s.quick_actions || []),
+    attrConfig: s.attr_config,
+    custom: true,
+    authorName: s.author_name,
+    status: s.status,  // pending/approved/rejected
+    authorId: s.author_id,
+    playCount: s.play_count || 0,
+    _fromBackend: true
+  }));
+}
+
 function getAllScripts(){
   return [...BUILTIN_SCRIPTS.map(s=>({...s, custom:false})), ...customScripts.map(s=>({...s, custom:true}))];
 }
@@ -1330,9 +1502,15 @@ function filterScripts(){
   renderScripts();
 }
 
-function renderScripts(){
+async function renderScripts(){
   const q = document.getElementById('scriptSearch').value.trim().toLowerCase();
-  let list = getAllScripts();
+
+  // 如果还没有加载过后端剧本，先加载
+  if (sharedScripts.length === 0 && hasActiveSession()) {
+    sharedScripts = await loadSharedScripts();
+  }
+
+  let list = [...getAllScripts(), ...sharedScripts];
   if(activeTag!=='全部') list = list.filter(s=>s.tag===activeTag);
   if(q) list = list.filter(s=>s.title.toLowerCase().includes(q)||s.tag.includes(q)||s.desc.toLowerCase().includes(q));
 
@@ -1341,23 +1519,40 @@ function renderScripts(){
   const c = document.getElementById('scriptList');
   if(!list.length){c.innerHTML=`<div class="empty-state"><p>没有找到匹配的剧本</p></div>`;return;}
 
-  c.innerHTML = list.map(s=>`
+  c.innerHTML = list.map(s=>{
+    // 显示审核状态
+    let statusBadge = '';
+    if (s.status === 'pending') {
+      statusBadge = '<span class="badge" style="background:var(--warning);color:#000;">待审核</span>';
+    } else if (s.status === 'rejected') {
+      statusBadge = '<span class="badge" style="background:var(--danger);">已拒绝</span>';
+    } else if (s._fromBackend) {
+      statusBadge = '<span class="badge badge-gold">共享</span>';
+    }
+
+    // 作者信息
+    const authorInfo = s.authorName ? `作者: ${esc(s.authorName)}` : (s.custom ? 'UID:'+userId.substring(0,6)+'**' : '官方');
+
+    return `
     <div class="card script-card" onclick="startGame('${s.id}')">
-      <div class="cover" style="position:relative;">${scriptCoverHtml(s)}<div class="cover-change-btn" onclick="event.stopPropagation();changeScriptCover('${s.id}')" title="更换封面">📷</div></div>
+      <div class="cover" style="position:relative;">${scriptCoverHtml(s)}
+        ${s._fromBackend ? '' : `<div class="cover-change-btn" onclick="event.stopPropagation();changeScriptCover('${s.id}')" title="更换封面">📷</div>`}
+      </div>
       <div class="info">
         <h4>${esc(s.title)}</h4>
         <div class="tags">
           <span class="badge badge-accent">${esc(s.tag)}</span>
-          ${s.custom?'<span class="badge badge-gold">自创</span>':''}
+          ${s.custom ? '<span class="badge badge-gold">自创</span>' : ''}
+          ${statusBadge}
         </div>
         <div class="meta">
           <span>👁 ${s.playCount||0}</span>
-          <span>${s.custom?'UID:'+userId.substring(0,6)+'**':'官方'}</span>
+          <span>${authorInfo}</span>
         </div>
       </div>
-      ${s.custom?`<span class="my-badge"><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();editScript('${s.id}')" style="padding:4px 8px;font-size:0.7rem;">编辑</button></span>`:''}
+      ${s.custom && !s._fromBackend ? `<span class="my-badge"><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();editScript('${s.id}')" style="padding:4px 8px;font-size:0.7rem;">编辑</button></span>` : ''}
     </div>
-  `).join('');
+  `}).join('');
 }
 
 // 更换内置剧本封面
@@ -1548,8 +1743,25 @@ function showCreateScript(editId){
     }
     LS.set('customScripts',customScripts);
     _generatedAttrConfig = null;
+
+    // 同步保存到后端（如果后端可用）
+    if (hasActiveSession()) {
+      const backendResult = await saveScriptToBackend(data);
+      if (backendResult.success) {
+        toast(existing ? '剧本已更新，提交审核中...' : '剧本已创建，提交审核中...');
+      } else {
+        toast(existing ? '剧本已更新（本地）' : '剧本已创建（本地）');
+      }
+    } else {
+      toast(existing ? '剧本已更新' : '剧本已创建');
+    }
+
+    // 同时保存封面到后端
+    if (data.coverIsImg) {
+      await saveAvatar('script', data.id, data.cover, 'scriptCovers');
+    }
+
     renderScripts();
-    toast(existing?'剧本已更新':'剧本已创建');
   });
   const descEl = document.getElementById('ms_desc');
   if(descEl) descEl.oninput=()=>{document.getElementById('ms_desc_count').textContent=descEl.value.length+'/1000';};
@@ -2065,7 +2277,12 @@ function confirmCharCreate(){
 //  游戏核心
 // ============================================================
 function getScriptById(id){
-  return getAllScripts().find(s=>s.id===id);
+  // 先从本地剧本中查找
+  const local = getAllScripts().find(s=>s.id===id);
+  if (local) return local;
+
+  // 再从后端共享剧本中查找
+  return sharedScripts.find(s=>s.id===id);
 }
 
 function getAttrConfig(){
@@ -5191,11 +5408,13 @@ async function renderAdminPanel(){
   container.innerHTML = `<div style="text-align:center;padding:20px;"><p style="color:var(--text2);">加载中...</p></div>`;
 
   try{
-    // 并行获取配置和兑换码列表
-    const [configResp, codesResp, statsResp] = await Promise.all([
+    // 并行获取配置、兑换码列表、统计、剧本审核
+    const [configResp, codesResp, statsResp, scriptStatsResp, pendingScriptsResp] = await Promise.all([
       fetch(API_BASE + '/api/admin/config', { headers:{'x-admin-token': _adminToken} }),
       fetch(API_BASE + '/api/admin/codes', { headers:{'x-admin-token': _adminToken} }),
-      fetch(API_BASE + '/api/admin/stats', { headers:{'x-admin-token': _adminToken} })
+      fetch(API_BASE + '/api/admin/stats', { headers:{'x-admin-token': _adminToken} }),
+      fetch(API_BASE + '/api/admin/scripts/stats', { headers:{'x-admin-token': _adminToken} }),
+      fetch(API_BASE + '/api/admin/scripts/pending', { headers:{'x-admin-token': _adminToken} })
     ]);
 
     if(configResp.status === 401 || codesResp.status === 401){
@@ -5210,11 +5429,32 @@ async function renderAdminPanel(){
     const config = await configResp.json();
     const codes = await codesResp.json();
     const stats = await statsResp.json();
+    const scriptStats = scriptStatsResp.ok ? (await scriptStatsResp.json()).stats : { pending: 0, approved: 0, rejected: 0 };
+    const pendingScripts = scriptStatsResp.ok ? (await pendingScriptsResp.json()).scripts : [];
 
     _adminCodesList = codes;
 
     const hasKey = config.hasApiKey;
     const keyHint = hasKey ? `已配置 (${config.defaultApiKey})` : '未配置';
+
+    // 渲染待审核剧本列表
+    const pendingScriptsHtml = pendingScripts.length > 0
+      ? pendingScripts.map(s => `
+        <div class="script-review-item" style="background:rgba(255,255,255,0.03);border:1px solid var(--glass-border);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+            <div>
+              <div style="font-size:0.9rem;font-weight:600;">${esc(s.title)}</div>
+              <div style="font-size:0.72rem;color:var(--text2);">作者: ${esc(s.author_name || '匿名')} · 类型: ${esc(s.tag || '冒险')}</div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-sm btn-primary" onclick="reviewScript('${esc(s.id)}', 'approve')" style="padding:4px 10px;font-size:0.72rem;">✅ 通过</button>
+              <button class="btn btn-sm btn-danger" onclick="reviewScript('${esc(s.id)}', 'reject')" style="padding:4px 10px;font-size:0.72rem;">❌ 拒绝</button>
+            </div>
+          </div>
+          <div style="font-size:0.75rem;color:var(--text3);line-height:1.5;">${esc(s.description || '无简介').substring(0, 100)}${(s.description || '').length > 100 ? '...' : ''}</div>
+        </div>
+      `).join('')
+      : '<p style="font-size:0.78rem;color:var(--text3);text-align:center;padding:20px;">暂无待审核剧本</p>';
 
     container.innerHTML = `
       <div class="admin-panel">
@@ -5237,6 +5477,21 @@ async function renderAdminPanel(){
           <div style="background:rgba(100,180,255,0.08);border:1px solid rgba(100,180,255,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
             <div style="font-size:1.2rem;font-weight:700;color:#6bb8ff;">${stats.activeSessions}</div>
             <div style="font-size:0.68rem;color:var(--text2);">活跃会话</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
+          <div style="background:rgba(255,180,100,0.08);border:1px solid rgba(255,180,100,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
+            <div style="font-size:1.2rem;font-weight:700;color:#ffb864;">${scriptStats.pending || 0}</div>
+            <div style="font-size:0.68rem;color:var(--text2);">待审核</div>
+          </div>
+          <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
+            <div style="font-size:1.2rem;font-weight:700;color:var(--green);">${scriptStats.approved || 0}</div>
+            <div style="font-size:0.68rem;color:var(--text2);">已通过</div>
+          </div>
+          <div style="background:rgba(255,100,100,0.08);border:1px solid rgba(255,100,100,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
+            <div style="font-size:1.2rem;font-weight:700;color:#ff6464;">${scriptStats.rejected || 0}</div>
+            <div style="font-size:0.68rem;color:var(--text2);">已拒绝</div>
           </div>
         </div>
 
@@ -5316,6 +5571,15 @@ async function renderAdminPanel(){
 
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--glass-border);">
           <p style="font-size:0.72rem;color:var(--text3);margin-bottom:8px;line-height:1.5;">💡 生成短码后直接发给玩家，玩家输入即可兑换。所有密钥安全存储在后端。</p>
+        </div>
+
+        <!-- 剧本审核区域 -->
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--glass-border);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <h4 style="margin:0;">📜 剧本审核</h4>
+            <button class="btn btn-sm btn-ghost" onclick="renderAdminPanel()" style="font-size:0.7rem;padding:4px 8px;">🔄 刷新</button>
+          </div>
+          <div id="pending_scripts_list">${pendingScriptsHtml}</div>
         </div>
       </div>
     `;
@@ -5534,6 +5798,24 @@ async function deleteAdminCode(code){
     if(!resp.ok){ toast('⚠️ ' + (data.error || '删除失败')); return; }
     toast('✅ 已删除');
     refreshAdminCodes();
+  }catch(err){ toast('⚠️ 网络错误'); }
+}
+
+// 审核剧本（通过/拒绝）
+async function reviewScript(id, action){
+  const note = action === 'reject' ? prompt('请输入拒绝原因（可选）') : '';
+
+  try{
+    const resp = await fetch(API_BASE + '/api/admin/script/review', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'x-admin-token': _adminToken},
+      body:JSON.stringify({ id, action, reviewNote: note || '' })
+    });
+    const data = await resp.json();
+    if(!resp.ok){ toast('⚠️ ' + (data.error || '审核失败')); return; }
+    toast(action === 'approve' ? '✅ 剧本已通过' : '❌ 剧本已拒绝');
+    // 刷新管理员面板
+    renderAdminPanel();
   }catch(err){ toast('⚠️ 网络错误'); }
 }
 

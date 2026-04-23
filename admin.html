@@ -3,55 +3,170 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>管理员登录 - Ni创</title>
+<title>管理员后台 - Ni创</title>
 <style>
-:root{--p:#6366f1;--b:#0f172a;--text:#e2e8f0}
+:root{--p:#6366f1;--b:#0f172a;--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--red:#ef4444;--green:#22c55e;--gold:#f59e0b;--accent:#ec4899;--accent2:#8b5cf6;--accent3:#06b6d4;--glass:rgba(30,41,59,0.7);--glass-border:rgba(255,255,255,0.08);--radius:12px;--radius-sm:8px}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui;background:var(--b);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1e293b,#0f172a)}
-.box{background:#1e293b;padding:2rem;border-radius:16px;width:100%;max-width:320px;box-shadow:0 25px50px-12px rgba(0,0,0,0.5)}
-h1{text-align:center;color:var(--p);margin-bottom:0.5rem}
-.sub{text-align:center;color:#64748b;margin-bottom:1.5rem;font-size:0.9rem}
+body{font-family:system-ui,-apple-system,sans-serif;background:linear-gradient(135deg,#0f172a,#1e293b);color:var(--text);min-height:100vh;line-height:1.6}
+.container{max-width:900px;margin:0 auto;padding:20px}
+.login-box{background:#1e293b;padding:2rem;border-radius:16px;max-width:360px;margin:15vh auto;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5)}
+.login-box h1{text-align:center;color:var(--p);margin-bottom:0.5rem;font-size:1.5rem}
+.login-box .sub{text-align:center;color:#64748b;margin-bottom:1.5rem;font-size:0.9rem}
 .f{margin-bottom:1rem}
 .f label{display:block;margin-bottom:0.5rem;color:#94a3b8;font-size:0.9rem}
 .f input{width:100%;padding:0.75rem;border:1px solid #334155;border-radius:8px;background:#0f172a;color:var(--text);font-size:1rem}
 .f input:focus{outline:none;border-color:var(--p)}
-.b{width:100%;padding:0.75rem;border:none;border-radius:8px;background:var(--p);color:#fff;font-size:1rem;cursor:pointer;margin-top:0.5rem}
-.b:hover{background:#4f46e5}
-.err{color:#ef4444;text-align:center;margin-top:1rem;font-size:0.9rem}
+.btn{width:100%;padding:0.75rem;border:none;border-radius:8px;background:var(--p);color:#fff;font-size:1rem;cursor:pointer;transition:opacity 0.2s}
+.btn:hover{opacity:0.9}
+.btn-sm{padding:6px 14px;font-size:0.8rem}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.btn-ghost{background:transparent;border:1px solid var(--glass-border)}
+.btn-danger{background:var(--red)}
+.err{color:var(--red);text-align:center;margin-top:1rem;font-size:0.9rem}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--glass-border)}
+.header h1{font-size:1.3rem;color:var(--p)}
+.header .actions{display:flex;gap:10px}
+.admin-panel{background:var(--glass);border:1px solid rgba(255,100,168,0.25);border-radius:var(--radius);padding:20px;margin-bottom:20px}
+.admin-panel h4{font-size:0.95rem;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:6px;color:var(--text)}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.stat-box{background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:12px;text-align:center}
+.stat-box.yellow{background:rgba(255,200,100,0.08);border-color:rgba(255,200,100,0.2)}
+.stat-box.blue{background:rgba(100,180,255,0.08);border-color:rgba(100,180,255,0.2)}
+.stat-box.red{background:rgba(255,100,100,0.08);border-color:rgba(255,100,100,0.2)}
+.stat-box .num{font-size:1.4rem;font-weight:700;color:var(--green)}
+.stat-box.yellow .num{color:var(--gold)}
+.stat-box.blue .num{color:#6bb8ff}
+.stat-box.red .num{color:#ff6464}
+.stat-box .label{font-size:0.7rem;color:var(--text2);margin-top:2px}
+.input{width:100%;padding:10px 12px;border:1px solid var(--glass-border);border-radius:var(--radius-sm);background:rgba(15,23,42,0.6);color:var(--text);font-size:0.9rem;margin-bottom:10px}
+.input:focus{outline:none;border-color:var(--accent)}
+.turns-selector{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px}
+.turns-btn{padding:8px 14px;border:1px solid var(--glass-border);border-radius:var(--radius-sm);background:transparent;color:var(--text2);cursor:pointer;font-size:0.8rem;transition:all 0.2s}
+.turns-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(255,100,168,0.1)}
+.code-list{max-height:240px;overflow-y:auto}
+.code-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:rgba(0,0,0,0.2);border-radius:var(--radius-sm);margin-bottom:8px;border:1px solid var(--glass-border)}
+.code-item .code{font-family:monospace;font-size:1rem;letter-spacing:1.5px;font-weight:600;color:var(--accent3);cursor:pointer}
+.code-item .meta{font-size:0.7rem;color:var(--text3)}
+.code-item .del{color:var(--red);cursor:pointer;padding:4px 8px;font-size:1.1rem}
+.script-item{background:rgba(255,255,255,0.03);border:1px solid var(--glass-border);border-radius:var(--radius-sm);padding:14px;margin-bottom:10px}
+.script-item .title{font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.script-item .meta{font-size:0.75rem;color:var(--text2);margin-bottom:8px}
+.script-item .desc{font-size:0.8rem;color:var(--text3);line-height:1.5}
+.script-item .actions{display:flex;gap:8px;margin-top:10px}
+.badge{font-size:0.65rem;padding:2px 8px;border-radius:4px;font-weight:500}
+.badge-green{background:rgba(100,255,150,0.15);color:#6bffa0}
+.badge-yellow{background:rgba(255,200,100,0.15);color:#ffc864}
+.badge-red{background:rgba(255,100,100,0.15);color:#ff6b6b}
+.batch-output{background:rgba(0,0,0,0.3);border-radius:var(--radius-sm);padding:12px;max-height:200px;overflow-y:auto;margin:12px 0}
+.batch-code{font-family:monospace;font-size:0.95rem;letter-spacing:2px;color:var(--accent3);padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer;font-weight:600}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,0.95);border:1px solid var(--glass-border);padding:12px 24px;border-radius:var(--radius-sm);font-size:0.9rem;z-index:10000}
+.hidden{display:none}
 </style>
 </head>
 <body>
-<div class="box">
-<h1>管理员登录</h1>
-<p class="sub">Ni创·AI文游平台</p>
-<form id="loginForm">
-<div class="f"><label>密码</label><input type="password" id="pwd" required></div>
-<button type="submit" class="b">登录</button>
-</form>
-<p class="err" id="err"></p>
+<div class="container">
+  <div id="loginView">
+    <div class="login-box">
+      <h1>管理员登录</h1>
+      <p class="sub">Ni创·AI文游平台</p>
+      <form id="loginForm">
+        <div class="f"><label>密码</label><input type="password" id="pwd" placeholder="请输入管理员密码" required></div>
+        <button type="submit" class="btn">登录</button>
+      </form>
+      <p class="err" id="err"></p>
+    </div>
+  </div>
+  <div id="adminView" class="hidden">
+    <div class="header">
+      <h1>管理员后台</h1>
+      <div class="actions">
+        <button class="btn btn-ghost btn-sm" onclick="changePassword()">修改密码</button>
+        <button class="btn btn-danger btn-sm" onclick="logout()">退出</button>
+      </div>
+    </div>
+    <div class="admin-panel">
+      <h4>📊 数据概况</h4>
+      <div class="stats-grid">
+        <div class="stat-box"><div class="num" id="statTotal">0</div><div class="label">总兑换码</div></div>
+        <div class="stat-box yellow"><div class="num" id="statUsed">0</div><div class="label">已使用</div></div>
+        <div class="stat-box blue"><div class="num" id="statActive">0</div><div class="label">活跃会话</div></div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-box yellow"><div class="num" id="statPending">0</div><div class="label">待审核剧本</div></div>
+        <div class="stat-box"><div class="num" id="statApproved">0</div><div class="label">已通过剧本</div></div>
+        <div class="stat-box red"><div class="num" id="statRejected">0</div><div class="label">已拒绝剧本</div></div>
+      </div>
+    </div>
+    <div class="admin-panel">
+      <h4>⚙️ API配置</h4>
+      <select class="input" id="platform">
+        <option value="1">DeepSeek (deepseek-chat)</option>
+        <option value="2">OpenAI (gpt-4o-mini)</option>
+        <option value="3">通义千问 (qwen-turbo)</option>
+        <option value="4">智谱GLM (glm-4-flash)</option>
+        <option value="5">Moonshot (moonshot-v1-8k)</option>
+        <option value="6">硅基流动 (DeepSeek-V3)</option>
+        <option value="7">百度百炼 (deepseek-v3)</option>
+        <option value="8">字节火山 (deepseek-v3)</option>
+        <option value="9">自定义平台</option>
+      </select>
+      <div id="customFields" class="hidden">
+        <input type="text" class="input" id="customUrl" placeholder="API地址">
+        <input type="text" class="input" id="customModel" placeholder="模型名称">
+      </div>
+      <input type="password" class="input" id="apiKey" placeholder="API密钥 (留空则使用后端默认)">
+      <p style="font-size:0.7rem;color:var(--text3);margin-top:4px" id="keyStatus">检测中...</p>
+      <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存配置</button>
+    </div>
+    <div class="admin-panel">
+      <h4>🎫 生成兑换码</h4>
+      <label style="font-size:0.8rem;color:var(--text2);display:block;margin-bottom:6px">每张回合数</label>
+      <div class="turns-selector" id="turnsSelector">
+        <button class="turns-btn" onclick="selectTurns(1)">1回合</button>
+        <button class="turns-btn active" onclick="selectTurns(5)">5回合</button>
+        <button class="turns-btn" onclick="selectTurns(10)">10回合</button>
+        <button class="turns-btn" onclick="selectTurns(20)">20回合</button>
+        <button class="turns-btn" onclick="selectTurns(50)">50回合</button>
+        <button class="turns-btn" onclick="selectTurns(100)">100回合</button>
+      </div>
+      <input type="number" class="input" id="customTurns" placeholder="自定义回合数" min="1">
+      <label style="font-size:0.8rem;color:var(--text2);display:block;margin:12px 0 6px">生成数量</label>
+      <div class="turns-selector" id="countSelector">
+        <button class="turns-btn active" onclick="selectCount(1)">1张</button>
+        <button class="turns-btn" onclick="selectCount(10)">10张</button>
+        <button class="turns-btn" onclick="selectCount(20)">20张</button>
+        <button class="turns-btn" onclick="selectCount(50)">50张</button>
+        <button class="turns-btn" onclick="selectCount(100)">100张</button>
+      </div>
+      <input type="number" class="input" id="customCount" placeholder="自定义数量 (最多500)" min="1" max="500">
+      <button class="btn btn-primary" onclick="generateCodes()">✨ 批量生成兑换码</button>
+      <div id="batchResult" class="hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 8px">
+          <span style="font-size:0.85rem;color:var(--text2)" id="batchTitle"></span>
+          <button class="btn btn-sm btn-primary" onclick="copyAllCodes()">📋 复制全部</button>
+        </div>
+        <div class="batch-output" id="batchList"></div>
+      </div>
+    </div>
+    <div class="admin-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h4 style="margin:0">📋 兑换码列表</h4>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="refreshCodes()">🔄 刷新</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearAllCodes()" style="color:var(--red)">清空</button>
+        </div>
+      </div>
+      <div class="code-list" id="codeList"><p style="color:var(--text3);font-size:0.85rem;text-align:center;padding:20px">加载中...</p></div>
+    </div>
+    <div class="admin-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h4 style="margin:0">📜 剧本管理</h4>
+        <button class="btn btn-ghost btn-sm" onclick="refreshScripts()">🔄 刷新</button>
+      </div>
+      <div id="scriptsList"><p style="color:var(--text3);font-size:0.85rem;text-align:center;padding:20px">加载中...</p></div>
+    </div>
+  </div>
 </div>
-<script>
-// 后端 API 地址
-const API_BASE='https://houduan-production-bf99.up.railway.app';
-
-async function api(u,o){
-  o=o||{};
-  var r=await fetch(API_BASE+u,{method:o.method||'POST',body:o.body,headers:{'Content-Type':'application/json'}});
-  var d=await r.json();
-  if(!r.ok)throw new Error(d.error||'错');
-  return d;
-}
-document.getElementById('loginForm').onsubmit=function(e){
-  e.preventDefault();
-  api('/api/admin/login',{body:JSON.stringify({password:document.getElementById('pwd').value})})
-    .then(function(d){
-      // 登录成功，跳转到游戏页面并带上token
-      window.location.href='nichuang.html?adminToken='+d.adminToken;
-    })
-    .catch(function(x){
-      document.getElementById('err').textContent=x.message;
-    });
-}
-</script>
+<script src="admin.js"></script>
 </body>
 </html>

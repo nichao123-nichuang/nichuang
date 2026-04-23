@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理员登录 - Ni创</title>
+<style>
+:root{--p:#6366f1;--b:#0f172a;--text:#e2e8f0}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui;background:var(--b);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1e293b,#0f172a)}
+.box{background:#1e293b;padding:2rem;border-radius:16px;width:100%;max-width:320px;box-shadow:0 25px50px-12px rgba(0,0,0,0.5)}
+h1{text-align:center;color:var(--p);margin-bottom:0.5rem}
+.sub{text-align:center;color:#64748b;margin-bottom:1.5rem;font-size:0.9rem}
+.f{margin-bottom:1rem}
+.f label{display:block;margin-bottom:0.5rem;color:#94a3b8;font-size:0.9rem}
+.f input{width:100%;padding:0.75rem;border:1px solid #334155;border-radius:8px;background:#0f172a;color:var(--text);font-size:1rem}
+.f input:focus{outline:none;border-color:var(--p)}
+.b{width:100%;padding:0.75rem;border:none;border-radius:8px;background:var(--p);color:#fff;font-size:1rem;cursor:pointer;margin-top:0.5rem}
+.b:hover{background:#4f46e5}
+.err{color:#ef4444;text-align:center;margin-top:1rem;font-size:0.9rem}
+</style>
+</head>
+<body>
+<div class="box">
+<h1>管理员登录</h1>
+<p class="sub">Ni创·AI文游平台</p>
+<form id="loginForm">
+<div class="f"><label>密码</label><input type="password" id="pwd" required></div>
+<button type="submit" class="b">登录</button>
+</form>
+<p class="err" id="err"></p>
+</div>
+<script>
+async function api(u,o){
+  o=o||{};
+  var r=await fetch(u,{method:o.method||'POST',body:o.body,headers:{'Content-Type':'application/json'}});
+  var d=await r.json();
+  if(!r.ok)throw new Error(d.error||'错');
+  return d;
+}
+document.getElementById('loginForm').onsubmit=function(e){
+  e.preventDefault();
+  api('/api/admin/login',{body:JSON.stringify({password:document.getElementById('pwd').value})})
+    .then(function(d){
+      // 登录成功，跳转到游戏页面并带上token
+      window.location.href='nichuang.html?adminToken='+d.adminToken;
+    })
+    .catch(function(x){
+      document.getElementById('err').textContent=x.message;
+    });
+}
+</script>
+</body>
+</html>

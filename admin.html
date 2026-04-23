@@ -31,9 +31,12 @@ h1{text-align:center;color:var(--p);margin-bottom:0.5rem}
 <p class="err" id="err"></p>
 </div>
 <script>
+// 后端 API 地址
+const API_BASE='https://houduan-production-bf99.up.railway.app';
+
 async function api(u,o){
   o=o||{};
-  var r=await fetch(u,{method:o.method||'POST',body:o.body,headers:{'Content-Type':'application/json'}});
+  var r=await fetch(API_BASE+u,{method:o.method||'POST',body:o.body,headers:{'Content-Type':'application/json'}});
   var d=await r.json();
   if(!r.ok)throw new Error(d.error||'错');
   return d;

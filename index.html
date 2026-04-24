@@ -1606,6 +1606,8 @@ function showCreateScript(editId){
       const backendResult = await saveScriptToBackend(data);
       if (backendResult.success) {
         toast(existing ? '✅ 剧本已更新，所有人可见' : '✅ 剧本已创建并发布，所有人可见');
+        // 刷新共享剧本列表，确保新发布的剧本立即显示
+        sharedScripts = await loadSharedScripts();
       } else {
         toast(existing ? '剧本已更新（本地）' : '剧本已创建（本地）');
       }

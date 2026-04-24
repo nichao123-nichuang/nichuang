@@ -5334,10 +5334,10 @@ async function renderAdminPanel(){
             </div>
             ${actionButtons}
           </div>
-          <div style="font-size:0.75rem;color:var(--text3);line-height:1.5;">${esc(s.description || '无简介').substring(0, 100)}${(s.description || '').length > 100 ? '...' : ''}</div>
-        </div>
-      `).join('')
-      : '<p style="font-size:0.78rem;color:var(--text3);text-align:center;padding:20px;">暂无剧本</p>';
+           <div style="font-size:0.75rem;color:var(--text3);line-height:1.5;">${esc(s.description || '无简介').substring(0, 100)}${(s.description || '').length > 100 ? '...' : ''}</div>
+         </div>
+       `}).join('')
+       : '<p style="font-size:0.78rem;color:var(--text3);text-align:center;padding:20px;">暂无剧本</p>';
 
     container.innerHTML = `
       <div class="admin-panel">

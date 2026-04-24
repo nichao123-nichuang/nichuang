@@ -569,7 +569,6 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.5;}
 <body>
 <canvas id="bg-canvas"></canvas>
 <div class="app-wrap" id="app">
-  <input type="file" id="_scriptCoverHiddenInput" accept="image/*" style="display:none;" onchange="onScriptCoverChange(this)">
 
   <!-- 顶部栏 -->
   <div class="top-bar">
@@ -1540,7 +1539,7 @@ async function renderScripts(){
     return `
     <div class="card script-card" onclick="startGame('${s.id}')">
       <div class="cover" style="position:relative;">${scriptCoverHtml(s)}
-        <div class="cover-change-btn" onclick="event.stopPropagation();changeScriptCover('${s.id}')" title="更换封面">📷</div>
+        ${s._fromBackend ? '' : `<div class="cover-change-btn" onclick="event.stopPropagation();changeScriptCover('${s.id}')" title="更换封面">📷</div>`}
       </div>
       <div class="info">
         <h4>${esc(s.title)}</h4>
@@ -1561,31 +1560,70 @@ async function renderScripts(){
 
 // 更换内置剧本封面
 function changeScriptCover(scriptId){
-  // 触发隐藏的文件选择器
-  const input = document.getElementById('_scriptCoverHiddenInput');
-  if(!input) return;
-  window._changingCoverId = scriptId;
-  input.click();
+  const script = getScriptById(scriptId);
+  if(!script) return;
+  const hasCustom = !!scriptCovers[scriptId];
+  const coverInfo = getScriptCover(script);
+  
+  showModal('📷 更换封面 - ' + script.title, `
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div class="cover-upload-preview" id="scriptCoverChangePreview" onclick="document.getElementById('scriptCoverChangeInput').click()" title="点击上传新封面" style="width:80px;height:108px;">
+          ${coverInfo.type==='img'?`<img src="${esc(coverInfo.value)}" alt="封面">`:`<span>${coverInfo.value}</span>`}
+          <div class="upload-hint">点击上传</div>
+        </div>
+        <input type="file" id="scriptCoverChangeInput" accept="image/*" style="display:none;" onchange="onScriptCoverChange(this)">
+        <div style="flex:1;">
+          <div style="font-size:0.85rem;margin-bottom:8px;">点击左侧封面可上传新图片</div>
+          <div style="font-size:0.75rem;color:var(--text3);line-height:1.5;">支持 JPG/PNG/WebP，建议比例 3:4<br>图片将保存在本地，不会上传服务器</div>
+          ${hasCustom?`<button class="btn btn-sm btn-danger" style="margin-top:8px;" onclick="removeScriptCover('${scriptId}')">🗑 恢复默认封面</button>`:''}
+        </div>
+      </div>
+    </div>
+  `, async ()=>{
+    // 确认：如果预览区有新图片，保存
+    const preview = document.getElementById('scriptCoverChangePreview');
+    const img = preview?.querySelector('img');
+    if(img && img.src && img.src.startsWith('data:')){
+      // 保存到后端 + 本地
+      await saveAvatar('script', scriptId, img.src, 'scriptCovers');
+      scriptCovers[scriptId] = img.src;
+      LS.set('scriptCovers', scriptCovers);
+      renderScripts();
+      toast('封面已更新');
+    }
+  }, true);
 }
 
-// 隐藏的file input，触发后保存后端 + 本地（跟头像逻辑一致）
-async function onScriptCoverChange(input){
-  const scriptId = window._changingCoverId;
-  window._changingCoverId = null;
-  if(!scriptId) return;
-
+function onScriptCoverChange(input){
   const file = input.files[0];
   if(!file) return;
   if(file.size > 5*1024*1024){toast('图片不能超过5MB');return;}
-
   const reader = new FileReader();
-  reader.onload = async function(e){
+  reader.onload = function(e){
     const base64 = e.target.result;
-    await saveAvatar('script', scriptId, base64, 'scriptCovers');
-    toast('✅ 封面已更新');
+    const preview = document.getElementById('scriptCoverChangePreview');
+    if(!preview) return;
+    const emojiSpan = preview.querySelector('span');
+    if(emojiSpan) emojiSpan.style.display = 'none';
+    const hint = preview.querySelector('.upload-hint');
+    if(hint) hint.style.display = 'none';
+    let img = preview.querySelector('img');
+    if(!img){img = document.createElement('img');preview.appendChild(img);}
+    img.src = base64;
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
   };
   reader.readAsDataURL(file);
-  input.value = '';
+}
+
+async function removeScriptCover(scriptId){
+  // 删除后端数据
+  await deleteAvatar('script', scriptId, 'scriptCovers');
+  delete scriptCovers[scriptId];
+  LS.set('scriptCovers', scriptCovers);
+  closeModal();
+  renderScripts();
+  toast('已恢复默认封面');
 }
 
 // 创建/编辑剧本
@@ -1755,7 +1793,7 @@ function showCreateScript(editId){
     if (hasActiveSession()) {
       const backendResult = await saveScriptToBackend(data);
       if (backendResult.success) {
-        toast(existing ? '✅ 剧本已更新，所有人可见' : '✅ 剧本已创建并发布，所有人可见');
+        toast(existing ? '剧本已更新，提交审核中...' : '剧本已创建，提交审核中...');
       } else {
         toast(existing ? '剧本已更新（本地）' : '剧本已创建（本地）');
       }
@@ -4092,7 +4130,7 @@ function getCharAvatar(ch){
 
   // 异步加载后端数据并更新本地缓存
   if (ch && ch.id) {
-    getAvatar('character', ch.id, 'charAvatars').then(backendAvatar => {
+    getAvatar('character', ch.id, 'builtinAvatars').then(backendAvatar => {
       if (backendAvatar && backendAvatar !== localAvatar) {
         const idx = myChars.findIndex(c => c.id === ch.id);
         if (idx >= 0) {
@@ -4102,20 +4140,9 @@ function getCharAvatar(ch){
           builtinAvatars[ch.id] = backendAvatar;
           LS.set('builtinAvatars', builtinAvatars);
         }
-        // 触发UI刷新
-        const el = document.getElementById('char_' + ch.id);
-        if (el) {
-          const img = el.querySelector('img') || document.createElement('img');
-          img.src = backendAvatar;
-          img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:50%;';
-          if (!el.querySelector('img')) {
-            const span = el.querySelector('span');
-            if (span) span.style.display = 'none';
-            el.insertBefore(img, el.firstChild);
-          }
-        }
+        renderCharContent();
       }
-    });
+    }).catch(() => {});
   }
 
   return localAvatar;
@@ -4851,17 +4878,17 @@ function onCharDetailAvatarChange(input){
     const base64 = e.target.result;
     const idx = myChars.findIndex(c=>c.id===charId);
     if(idx>=0){
-      // 自建角色：保存到myChars + 后端
+      // 自建角色：直接保存到myChars
       myChars[idx].avatar = base64;
       LS.set('myChars', myChars);
-      // 同步到后端公共存储
-      await saveAvatar('character', charId, base64, 'charAvatars');
+      // 同时保存到后端
+      await saveAvatar('character', charId, base64, 'builtinAvatars');
     } else {
-      // 内置角色：保存到builtinAvatars + 后端
+      // 内置角色：保存到builtinAvatars
       builtinAvatars[charId] = base64;
       LS.set('builtinAvatars', builtinAvatars);
-      // 同步到后端公共存储
-      await saveAvatar('character', charId, base64, 'charAvatars');
+      // 同时保存到后端
+      await saveAvatar('character', charId, base64, 'builtinAvatars');
     }
     // 更新弹窗内头像
     const avatarEl = document.getElementById('charDetailAvatar');
@@ -5426,12 +5453,13 @@ async function renderAdminPanel(){
   container.innerHTML = `<div style="text-align:center;padding:20px;"><p style="color:var(--text2);">加载中...</p></div>`;
 
   try{
-    // 并行获取配置、兑换码列表、统计、所有剧本
-    const [configResp, codesResp, statsResp, allScriptsResp] = await Promise.all([
+    // 并行获取配置、兑换码列表、统计、剧本审核
+    const [configResp, codesResp, statsResp, scriptStatsResp, pendingScriptsResp] = await Promise.all([
       fetch(API_BASE + '/api/admin/config', { headers:{'x-admin-token': _adminToken} }),
       fetch(API_BASE + '/api/admin/codes', { headers:{'x-admin-token': _adminToken} }),
       fetch(API_BASE + '/api/admin/stats', { headers:{'x-admin-token': _adminToken} }),
-      fetch(API_BASE + '/api/admin/scripts/all', { headers:{'x-admin-token': _adminToken} })
+      fetch(API_BASE + '/api/admin/scripts/stats', { headers:{'x-admin-token': _adminToken} }),
+      fetch(API_BASE + '/api/admin/scripts/pending', { headers:{'x-admin-token': _adminToken} })
     ]);
 
     if(configResp.status === 401 || codesResp.status === 401){
@@ -5446,48 +5474,32 @@ async function renderAdminPanel(){
     const config = await configResp.json();
     const codes = await codesResp.json();
     const stats = await statsResp.json();
-    const allScripts = allScriptsResp.ok ? (await allScriptsResp.json()).scripts : [];
+    const scriptStats = scriptStatsResp.ok ? (await scriptStatsResp.json()).stats : { pending: 0, approved: 0, rejected: 0 };
+    const pendingScripts = scriptStatsResp.ok ? (await pendingScriptsResp.json()).scripts : [];
 
     _adminCodesList = codes;
 
     const hasKey = config.hasApiKey;
     const keyHint = hasKey ? `已配置 (${config.defaultApiKey})` : '未配置';
 
-    // 统计各状态剧本数量
-    const pendingCount = allScripts.filter(s => s.status === 'pending').length;
-    const approvedCount = allScripts.filter(s => s.status === 'approved').length;
-    const rejectedCount = allScripts.filter(s => s.status === 'rejected').length;
-
-    // 渲染所有剧本列表（带状态标签）
-    const allScriptsHtml = allScripts.length > 0
-      ? allScripts.map(s => {
-          const statusBadge = s.status === 'approved'
-            ? '<span style="font-size:0.62rem;background:rgba(100,255,150,0.15);color:#6bffa0;padding:2px 6px;border-radius:4px;">已通过</span>'
-            : s.status === 'pending'
-            ? '<span style="font-size:0.62rem;background:rgba(255,200,100,0.15);color:#ffc864;padding:2px 6px;border-radius:4px;">待审核</span>'
-            : '<span style="font-size:0.62rem;background:rgba(255,100,100,0.15);color:#ff6b6b;padding:2px 6px;border-radius:4px;">已拒绝</span>';
-          const actionButtons = s.status === 'pending'
-            ? `<div style="display:flex;gap:6px;">
-                <button class="btn btn-sm btn-primary" onclick="reviewScript('${esc(s.id)}', 'approve')" style="padding:4px 10px;font-size:0.72rem;">✅ 通过</button>
-                <button class="btn btn-sm btn-danger" onclick="reviewScript('${esc(s.id)}', 'reject')" style="padding:4px 10px;font-size:0.72rem;">❌ 拒绝</button>
-               </div>`
-            : `<div style="display:flex;gap:6px;">
-                ${s.status === 'rejected' ? `<button class="btn btn-sm btn-primary" onclick="reviewScript('${esc(s.id)}', 'approve')" style="padding:4px 10px;font-size:0.72rem;">✅ 通过</button>` : ''}
-                <button class="btn btn-sm btn-ghost" onclick="reviewScript('${esc(s.id)}', 'delete')" style="padding:4px 10px;font-size:0.72rem;color:var(--red);">🗑️ 删除</button>
-               </div>`;
-          return `
+    // 渲染待审核剧本列表
+    const pendingScriptsHtml = pendingScripts.length > 0
+      ? pendingScripts.map(s => `
         <div class="script-review-item" style="background:rgba(255,255,255,0.03);border:1px solid var(--glass-border);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div>
-              <div style="font-size:0.9rem;font-weight:600;">${esc(s.title)} ${statusBadge}</div>
+              <div style="font-size:0.9rem;font-weight:600;">${esc(s.title)}</div>
               <div style="font-size:0.72rem;color:var(--text2);">作者: ${esc(s.author_name || '匿名')} · 类型: ${esc(s.tag || '冒险')}</div>
             </div>
-            ${actionButtons}
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-sm btn-primary" onclick="reviewScript('${esc(s.id)}', 'approve')" style="padding:4px 10px;font-size:0.72rem;">✅ 通过</button>
+              <button class="btn btn-sm btn-danger" onclick="reviewScript('${esc(s.id)}', 'reject')" style="padding:4px 10px;font-size:0.72rem;">❌ 拒绝</button>
+            </div>
           </div>
           <div style="font-size:0.75rem;color:var(--text3);line-height:1.5;">${esc(s.description || '无简介').substring(0, 100)}${(s.description || '').length > 100 ? '...' : ''}</div>
         </div>
       `).join('')
-      : '<p style="font-size:0.78rem;color:var(--text3);text-align:center;padding:20px;">暂无剧本</p>';
+      : '<p style="font-size:0.78rem;color:var(--text3);text-align:center;padding:20px;">暂无待审核剧本</p>';
 
     container.innerHTML = `
       <div class="admin-panel">
@@ -5515,15 +5527,15 @@ async function renderAdminPanel(){
 
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
           <div style="background:rgba(255,180,100,0.08);border:1px solid rgba(255,180,100,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
-            <div style="font-size:1.2rem;font-weight:700;color:#ffb864;">${pendingCount}</div>
+            <div style="font-size:1.2rem;font-weight:700;color:#ffb864;">${scriptStats.pending || 0}</div>
             <div style="font-size:0.68rem;color:var(--text2);">待审核</div>
           </div>
           <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
-            <div style="font-size:1.2rem;font-weight:700;color:var(--green);">${approvedCount}</div>
+            <div style="font-size:1.2rem;font-weight:700;color:var(--green);">${scriptStats.approved || 0}</div>
             <div style="font-size:0.68rem;color:var(--text2);">已通过</div>
           </div>
           <div style="background:rgba(255,100,100,0.08);border:1px solid rgba(255,100,100,0.2);border-radius:var(--radius-sm);padding:8px 10px;text-align:center;">
-            <div style="font-size:1.2rem;font-weight:700;color:#ff6464;">${rejectedCount}</div>
+            <div style="font-size:1.2rem;font-weight:700;color:#ff6464;">${scriptStats.rejected || 0}</div>
             <div style="font-size:0.68rem;color:var(--text2);">已拒绝</div>
           </div>
         </div>
@@ -5606,13 +5618,13 @@ async function renderAdminPanel(){
           <p style="font-size:0.72rem;color:var(--text3);margin-bottom:8px;line-height:1.5;">💡 生成短码后直接发给玩家，玩家输入即可兑换。所有密钥安全存储在后端。</p>
         </div>
 
-        <!-- 剧本管理区域 -->
+        <!-- 剧本审核区域 -->
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--glass-border);">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-            <h4 style="margin:0;">📜 剧本管理 (${allScripts.length})</h4>
+            <h4 style="margin:0;">📜 剧本审核</h4>
             <button class="btn btn-sm btn-ghost" onclick="renderAdminPanel()" style="font-size:0.7rem;padding:4px 8px;">🔄 刷新</button>
           </div>
-          <div id="all_scripts_list" style="max-height:400px;overflow-y:auto;">${allScriptsHtml}</div>
+          <div id="pending_scripts_list">${pendingScriptsHtml}</div>
         </div>
       </div>
     `;
@@ -5834,11 +5846,8 @@ async function deleteAdminCode(code){
   }catch(err){ toast('⚠️ 网络错误'); }
 }
 
-// 审核剧本（通过/拒绝/删除）
+// 审核剧本（通过/拒绝）
 async function reviewScript(id, action){
-  if (action === 'delete') {
-    if (!confirm('确定要删除这个剧本吗？此操作不可恢复。')) return;
-  }
   const note = action === 'reject' ? prompt('请输入拒绝原因（可选）') : '';
 
   try{
@@ -5848,8 +5857,8 @@ async function reviewScript(id, action){
       body:JSON.stringify({ id, action, reviewNote: note || '' })
     });
     const data = await resp.json();
-    if(!resp.ok){ toast('⚠️ ' + (data.error || '操作失败')); return; }
-    toast(action === 'approve' ? '✅ 剧本已通过' : action === 'delete' ? '🗑️ 剧本已删除' : '❌ 剧本已拒绝');
+    if(!resp.ok){ toast('⚠️ ' + (data.error || '审核失败')); return; }
+    toast(action === 'approve' ? '✅ 剧本已通过' : '❌ 剧本已拒绝');
     // 刷新管理员面板
     renderAdminPanel();
   }catch(err){ toast('⚠️ 网络错误'); }

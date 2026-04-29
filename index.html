@@ -998,8 +998,13 @@ async function deleteAvatar(avatarType, targetName, localStorageKey) {
   LS.set(localStorageKey, localData);
 }
 
-// 统一后端AI调用辅助函数
+// 统一后端AI调用辅助函数（有自带Key则直连，否则走后端兑换码）
 async function callBackendAI(messages, maxTokens, temperature){
+  // 自带 API Key 直连模式
+  if(useDirectApi()){
+    return await callDirectApi(messages, maxTokens, temperature);
+  }
+  // 兑换码后端模式
   if(!sessionToken) throw new Error('请先输入兑换码');
   const resp = await fetch(API_BASE + '/api/chat', {
     method:'POST',
@@ -1040,15 +1045,55 @@ async function callBackendAI(messages, maxTokens, temperature){
   return data.content || '';
 }
 
-// 检查是否有有效会话
+// 检查是否有有效会话（兑换码 OR 自带API Key 均算有效）
 function hasActiveSession(){
-  return !!sessionToken;
+  return !!sessionToken || !!(settings.directApiKey && settings.directApiKey.trim());
+}
+
+// 是否使用自带 API Key 直连模式
+function useDirectApi(){
+  return !!(settings.directApiKey && settings.directApiKey.trim());
+}
+
+// 自带 API Key 直连调用（OpenAI 兼容格式）
+async function callDirectApi(messages, maxTokens, temperature){
+  const apiUrl = (settings.directApiUrl && settings.directApiUrl.trim())
+    ? settings.directApiUrl.trim().replace(/\/$/, '') + '/chat/completions'
+    : 'https://api.openai.com/v1/chat/completions';
+  const model = (settings.directApiModel && settings.directApiModel.trim())
+    ? settings.directApiModel.trim()
+    : 'gpt-4o-mini';
+  const resp = await fetch(apiUrl, {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Authorization':'Bearer ' + settings.directApiKey.trim()
+    },
+    body:JSON.stringify({
+      model,
+      messages,
+      max_tokens: maxTokens || 4096,
+      temperature: temperature || 0.85
+    }),
+    signal: AbortSignal.timeout(90000)
+  });
+  if(!resp.ok){
+    const errData = await resp.json().catch(()=>({}));
+    throw new Error((errData.error?.message || errData.error || '请求失败('+resp.status+')'));
+  }
+  const data = await resp.json();
+  return data.choices?.[0]?.message?.content || '';
 }
 
 // 设置（前端只保留外观/人设等非敏感配置）
 let settings = LS.get('settings', {
-  theme:'dark', autoSave:true
+  theme:'dark', autoSave:true,
+  directApiUrl:'', directApiKey:'', directApiModel:''
 });
+// 兼容老版本 settings（没有 directApi 字段时补上默认值）
+if(settings.directApiUrl === undefined) settings.directApiUrl = '';
+if(settings.directApiKey === undefined) settings.directApiKey = '';
+if(settings.directApiModel === undefined) settings.directApiModel = '';
 
 // 预设剧本数据
 const BUILTIN_SCRIPTS = [
@@ -2449,46 +2494,77 @@ async function callAI(userMsg, systemPrompt){
   ];
 
   try{
-    // 通过后端代理调用AI
-    const resp = await fetch(API_BASE + '/api/chat', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        sessionToken,
-        messages,
-        max_tokens:4096,
-        temperature:0.85
-      }),
-      signal: AbortSignal.timeout(90000)
-    });
+    let aiText = '';
 
-    removeTypingIndicator();
-
-    if(!resp.ok){
-      const errData = await resp.json().catch(()=>({}));
-      console.error('API error:', resp.status, errData);
-      if(resp.status === 401){
-        addNarratorMsg('⚠️ 会话已过期，请重新输入兑换码。');
-      } else if(resp.status === 403){
-        addNarratorMsg('⚠️ 兑换码回合数已用完，请获取新的兑换码。');
-      } else {
-        addNarratorMsg('⚠️ 请求失败('+resp.status+')：'+(errData.error||'请检查后端服务是否运行'));
+    if(useDirectApi()){
+      // ===== 自带 API Key 直连模式 =====
+      try {
+        aiText = await callDirectApi(messages, 4096, 0.85);
+      } catch(e) {
+        removeTypingIndicator();
+        addNarratorMsg('⚠️ 直连 API 失败：' + e.message);
+        isStreaming = false;
+        return;
       }
-      isStreaming=false;
-      return;
+      removeTypingIndicator();
+    } else {
+      // ===== 兑换码后端模式 =====
+      const resp = await fetch(API_BASE + '/api/chat', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionToken,
+          messages,
+          max_tokens:4096,
+          temperature:0.85
+        }),
+        signal: AbortSignal.timeout(90000)
+      });
+
+      removeTypingIndicator();
+
+      if(!resp.ok){
+        const errData = await resp.json().catch(()=>({}));
+        console.error('API error:', resp.status, errData);
+        if(resp.status === 401){
+          addNarratorMsg('⚠️ 会话已过期，请重新输入兑换码。');
+        } else if(resp.status === 403){
+          addNarratorMsg('⚠️ 兑换码回合数已用完，请获取新的兑换码。');
+        } else {
+          addNarratorMsg('⚠️ 请求失败('+resp.status+')：'+(errData.error||'请检查后端服务是否运行'));
+        }
+        isStreaming=false;
+        return;
+      }
+
+      const data = await resp.json();
+      aiText = data.content || '';
+
+      // 更新剩余回合
+      sessionRemaining = data.remaining;
+      if(redeemState && data.remaining !== undefined){
+        redeemState.usedTurns = redeemState.totalTurns - data.remaining;
+        LS.set('redeemState', redeemState);
+        renderRedeemStatus();
+      }
+      // 回合数告警
+      if(data.remaining === 3) toast('⚠️ 兑换码还剩 3 回合');
+      if(data.remaining === 1) toast('⚠️ 兑换码仅剩最后 1 回合！');
+      if(data.remaining === 0){
+        setTimeout(()=>{
+          showModal('🎫 兑换码已用完', `
+            <p style="font-size:0.88rem;line-height:1.7;margin-bottom:16px;">你的兑换码回合数已全部用完，无法继续游戏。</p>
+            <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">请获取新的兑换码后继续冒险！</p>
+            <div style="display:flex;gap:10px;">
+              <button class="btn btn-ghost btn-sm" style="flex:1;" onclick="closeModal()">关闭</button>
+              <button class="btn btn-primary btn-sm" style="flex:1;" onclick="closeModal();switchPage('about');setTimeout(()=>showRedeemModal(),300)">🎫 输入新兑换码</button>
+            </div>
+          `, null, true);
+        }, 500);
+      }
     }
 
-    const data = await resp.json();
-    const aiText = data.content || '';
     if(!aiText){addNarratorMsg('⚠️ AI返回了空内容');isStreaming=false;return;}
-
-    // 更新剩余回合
-    sessionRemaining = data.remaining;
-    if(redeemState && data.remaining !== undefined){
-      redeemState.usedTurns = redeemState.totalTurns - data.remaining;
-      LS.set('redeemState', redeemState);
-      renderRedeemStatus();
-    }
 
     // 保存消息
     gameState.messages.push({role:'user', content:userMsg.split('玩家输入：').pop()});
@@ -2497,21 +2573,6 @@ async function callAI(userMsg, systemPrompt){
     // 打字机效果
     await typewriterOutput(aiText);
 
-    // 回合数告警
-    if(data.remaining === 3) toast('⚠️ 兑换码还剩 3 回合');
-    if(data.remaining === 1) toast('⚠️ 兑换码仅剩最后 1 回合！');
-    if(data.remaining === 0){
-      setTimeout(()=>{
-        showModal('🎫 兑换码已用完', `
-          <p style="font-size:0.88rem;line-height:1.7;margin-bottom:16px;">你的兑换码回合数已全部用完，无法继续游戏。</p>
-          <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">请获取新的兑换码后继续冒险！</p>
-          <div style="display:flex;gap:10px;">
-            <button class="btn btn-ghost btn-sm" style="flex:1;" onclick="closeModal()">关闭</button>
-            <button class="btn btn-primary btn-sm" style="flex:1;" onclick="closeModal();switchPage('about');setTimeout(()=>showRedeemModal(),300)">🎫 输入新兑换码</button>
-          </div>
-        `, null, true);
-      }, 500);
-    }
   }catch(err){
     removeTypingIndicator();
     if(err.name==='TimeoutError'){
@@ -4983,10 +5044,15 @@ window.submitCommentFromDetail = function(){
 //  设置
 // ============================================================
 function showSettings(msg){
-  const sessionInfo = sessionToken ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
+  const directApiActive = useDirectApi();
+  const sessionInfo = directApiActive
+    ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
+    🔑 已启用自带 API Key · 无限回合
+  </div>`
+    : sessionToken ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
     ✅ 已激活会话 · 剩余 <strong style="color:var(--gold)">${sessionRemaining < 0 ? '无限' : sessionRemaining}</strong> 回合
   </div>` : `<div style="background:rgba(255,100,168,0.08);border:1px solid rgba(255,100,168,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
-    ⚠️ 尚未激活兑换码，请输入兑换码后开始游戏
+    ⚠️ 尚未激活兑换码，请输入兑换码或填写自带 API Key 后开始游戏
   </div>`;
 
   showModal('设置'+(msg?' - '+msg:''), `
@@ -4996,6 +5062,27 @@ function showSettings(msg){
       <div style="display:flex;gap:8px;">
         <button class="btn btn-sm btn-primary" style="flex:1;" onclick="closeModal();showRedeemModal()">🎫 输入兑换码</button>
         ${sessionToken ? `<button class="btn btn-sm btn-ghost" style="flex:1;" onclick="clearSession()">清除会话</button>` : ''}
+      </div>
+    </div>
+    <div class="setting-group">
+      <h4>🔑 自带 API Key（可选）</h4>
+      <div style="font-size:0.75rem;color:var(--text2);margin-bottom:10px;line-height:1.5;">填入自己的 API Key 后，将直接调用 AI，不消耗兑换码回合数。支持 OpenAI 及兼容接口（DeepSeek、Moonshot 等）。</div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:0.82rem;color:var(--text2);margin-bottom:4px;display:block;">API 地址（可选，默认 OpenAI）</label>
+        <input type="text" class="input" id="s_directApiUrl" value="${esc(settings.directApiUrl)}" placeholder="https://api.openai.com/v1" style="font-size:0.82rem;">
+        <div style="font-size:0.7rem;color:var(--text3);margin-top:3px;">DeepSeek: https://api.deepseek.com/v1 &nbsp;|&nbsp; Moonshot: https://api.moonshot.cn/v1</div>
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:0.82rem;color:var(--text2);margin-bottom:4px;display:block;">API Key <span style="color:var(--red)">*</span></label>
+        <input type="password" class="input" id="s_directApiKey" value="${esc(settings.directApiKey)}" placeholder="sk-..." style="font-size:0.82rem;">
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:0.82rem;color:var(--text2);margin-bottom:4px;display:block;">模型名称（可选）</label>
+        <input type="text" class="input" id="s_directApiModel" value="${esc(settings.directApiModel)}" placeholder="gpt-4o-mini / deepseek-chat / moonshot-v1-8k" style="font-size:0.82rem;">
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-sm btn-ghost" style="flex:1;" onclick="testDirectApi()">🧪 测试连接</button>
+        ${directApiActive ? `<button class="btn btn-sm btn-danger" style="flex:1;" onclick="clearDirectApi()">清除 Key</button>` : ''}
       </div>
     </div>
     <div class="setting-group">
@@ -5033,13 +5120,16 @@ function showSettings(msg){
         <div class="toggle ${settings.autoSave?'on':''}" onclick="this.classList.toggle('on')"></div>
       </div>
       <div class="setting-item">
-        <label>测试API连接</label>
+        <label>测试兑换码连接</label>
         <button class="btn btn-sm btn-ghost" onclick="testAPI()">测试</button>
       </div>
     </div>
   `,()=>{
     settings.theme=document.getElementById('s_theme').value;
     settings.autoSave=document.querySelector('.toggle')?.classList.contains('on') || true;
+    settings.directApiUrl=(document.getElementById('s_directApiUrl')?.value||'').trim();
+    settings.directApiKey=(document.getElementById('s_directApiKey')?.value||'').trim();
+    settings.directApiModel=(document.getElementById('s_directApiModel')?.value||'').trim();
     myProfile.name=gv('s_name').trim();
     myProfile.gender=document.querySelector('.gender-btns:last-of-type .gender-btn.active')?.textContent||'';
     myProfile.desc=gv('s_desc').trim();
@@ -5062,6 +5152,18 @@ function clearSession(){
   toast('会话已清除');
 }
 
+// 清除自带 API Key
+function clearDirectApi(){
+  settings.directApiUrl = '';
+  settings.directApiKey = '';
+  settings.directApiModel = '';
+  LS.set('settings', settings);
+  closeModal();
+  toast('已清除自带 API Key');
+  setTimeout(() => showSettings(), 200);
+}
+
+// 测试兑换码连接
 async function testAPI(){
   if(!sessionToken){ toast('请先激活兑换码'); return; }
   toast('测试中...');
@@ -5072,10 +5174,38 @@ async function testAPI(){
       body:JSON.stringify({ sessionToken, messages:[{role:'user',content:'hi'}], maxTokens:5, temperature:0.5 }),
       signal:AbortSignal.timeout(15000)
     });
-    if(resp.ok){ toast('✅ 连接成功！'); }
+    if(resp.ok){ toast('✅ 兑换码连接成功！'); }
     else{
       const data = await resp.json().catch(()=>({}));
       toast('❌ 失败('+resp.status+'): '+(data.error||'未知错误'));
+    }
+  }catch(e){
+    toast('❌ 连接失败: '+e.message);
+  }
+}
+
+// 测试自带 API Key 连接
+async function testDirectApi(){
+  // 先保存当前输入框的值
+  const url = (document.getElementById('s_directApiUrl')?.value||'').trim();
+  const key = (document.getElementById('s_directApiKey')?.value||'').trim();
+  const model = (document.getElementById('s_directApiModel')?.value||'').trim() || 'gpt-4o-mini';
+  if(!key){ toast('请先填写 API Key'); return; }
+  toast('测试连接中...');
+  try{
+    const apiUrl = url
+      ? url.replace(/\/$/, '') + '/chat/completions'
+      : 'https://api.openai.com/v1/chat/completions';
+    const resp = await fetch(apiUrl, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({ model, messages:[{role:'user',content:'hi'}], max_tokens:5, temperature:0.5 }),
+      signal:AbortSignal.timeout(20000)
+    });
+    if(resp.ok){ toast('✅ API Key 连接成功！'); }
+    else{
+      const data = await resp.json().catch(()=>({}));
+      toast('❌ 失败('+resp.status+'): '+(data.error?.message||data.error||'未知错误'));
     }
   }catch(e){
     toast('❌ 连接失败: '+e.message);

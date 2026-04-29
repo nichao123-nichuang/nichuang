@@ -5044,47 +5044,41 @@ window.submitCommentFromDetail = function(){
 //  设置
 // ============================================================
 function showSettings(msg){
+  // 计算激活状态标签
   const directApiActive = useDirectApi();
-  const sessionInfo = directApiActive
-    ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
-    🔑 已启用自带 API Key · 无限回合
-  </div>`
-    : sessionToken ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
-    ✅ 已激活会话 · 剩余 <strong style="color:var(--gold)">${sessionRemaining < 0 ? '无限' : sessionRemaining}</strong> 回合
-  </div>` : `<div style="background:rgba(255,100,168,0.08);border:1px solid rgba(255,100,168,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:12px;">
-    ⚠️ 尚未激活兑换码，请输入兑换码或填写自带 API Key 后开始游戏
-  </div>`;
+  const redeemActive = !!sessionToken;
+  const redeemTag = directApiActive
+    ? '' // 用了直连就不显示兑换码状态
+    : redeemActive
+      ? `<span style="font-size:0.7rem;padding:2px 8px;border-radius:10px;background:rgba(74,222,128,0.15);color:var(--green);margin-left:6px;">✅ 已激活</span>`
+      : `<span style="font-size:0.7rem;padding:2px 8px;border-radius:10px;background:rgba(255,92,138,0.12);color:var(--red);margin-left:6px;">未激活</span>`;
+  const apiTag = directApiActive
+    ? `<span style="font-size:0.7rem;padding:2px 8px;border-radius:10px;background:rgba(74,222,128,0.15);color:var(--green);margin-left:6px;">✅ 已启用</span>`
+    : `<span style="font-size:0.7rem;padding:2px 8px;border-radius:10px;background:rgba(120,120,120,0.15);color:var(--text3);margin-left:6px;">未配置</span>`;
 
-  showModal('设置'+(msg?' - '+msg:''), `
-    <div class="setting-group">
-      <h4>🎫 会话状态</h4>
-      ${sessionInfo}
-      <div style="display:flex;gap:8px;">
-        <button class="btn btn-sm btn-primary" style="flex:1;" onclick="closeModal();showRedeemModal()">🎫 输入兑换码</button>
-        ${sessionToken ? `<button class="btn btn-sm btn-ghost" style="flex:1;" onclick="clearSession()">清除会话</button>` : ''}
+  showModal('设置'+(msg?' · '+msg:''), `
+    <div style="margin-bottom:6px;">
+      <div style="font-size:0.75rem;color:var(--text3);margin-bottom:10px;">选择连接方式开始游戏</div>
+      <!-- 兑换码入口 -->
+      <div onclick="closeModal();setTimeout(showRedeemSettings,180)" style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--glass);border:1px solid var(--glass-border);border-radius:var(--radius-sm);cursor:pointer;transition:border-color 0.2s;margin-bottom:10px;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--glass-border)'">
+        <div style="font-size:1.8rem;flex-shrink:0;">🎫</div>
+        <div style="flex:1;">
+          <div style="font-size:0.92rem;font-weight:700;margin-bottom:2px;">兑换码${redeemTag}</div>
+          <div style="font-size:0.75rem;color:var(--text2);">${redeemActive ? `剩余 <strong style="color:var(--gold)">${sessionRemaining < 0 ? '无限' : sessionRemaining}</strong> 回合 · 点击管理` : '填入兑换码即可游玩，无需 API'}</div>
+        </div>
+        <div style="color:var(--text3);font-size:1rem;">›</div>
+      </div>
+      <!-- API 接入入口 -->
+      <div onclick="closeModal();setTimeout(showApiSettings,180)" style="display:flex;align-items:center;gap:14px;padding:14px 16px;background:var(--glass);border:1px solid var(--glass-border);border-radius:var(--radius-sm);cursor:pointer;transition:border-color 0.2s;margin-bottom:10px;" onmouseover="this.style.borderColor='var(--accent2)'" onmouseout="this.style.borderColor='var(--glass-border)'">
+        <div style="font-size:1.8rem;flex-shrink:0;">🔑</div>
+        <div style="flex:1;">
+          <div style="font-size:0.92rem;font-weight:700;margin-bottom:2px;">自带 API Key${apiTag}</div>
+          <div style="font-size:0.75rem;color:var(--text2);">${directApiActive ? `已配置 · ${(settings.directApiModel||'gpt-4o-mini')} · 无限回合` : '接入自己的 AI 接口，无限畅玩'}</div>
+        </div>
+        <div style="color:var(--text3);font-size:1rem;">›</div>
       </div>
     </div>
-    <div class="setting-group">
-      <h4>🔑 自带 API Key（可选）</h4>
-      <div style="font-size:0.75rem;color:var(--text2);margin-bottom:10px;line-height:1.5;">填入自己的 API Key 后，将直接调用 AI，不消耗兑换码回合数。支持 OpenAI 及兼容接口（DeepSeek、Moonshot 等）。</div>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:0.82rem;color:var(--text2);margin-bottom:4px;display:block;">API 地址（可选，默认 OpenAI）</label>
-        <input type="text" class="input" id="s_directApiUrl" value="${esc(settings.directApiUrl)}" placeholder="https://api.openai.com/v1" style="font-size:0.82rem;">
-        <div style="font-size:0.7rem;color:var(--text3);margin-top:3px;">DeepSeek: https://api.deepseek.com/v1 &nbsp;|&nbsp; Moonshot: https://api.moonshot.cn/v1</div>
-      </div>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:0.82rem;color:var(--text2);margin-bottom:4px;display:block;">API Key <span style="color:var(--red)">*</span></label>
-        <input type="password" class="input" id="s_directApiKey" value="${esc(settings.directApiKey)}" placeholder="sk-..." style="font-size:0.82rem;">
-      </div>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:0.82rem;color:var(--text2);margin-bottom:4px;display:block;">模型名称（可选）</label>
-        <input type="text" class="input" id="s_directApiModel" value="${esc(settings.directApiModel)}" placeholder="gpt-4o-mini / deepseek-chat / moonshot-v1-8k" style="font-size:0.82rem;">
-      </div>
-      <div style="display:flex;gap:8px;">
-        <button class="btn btn-sm btn-ghost" style="flex:1;" onclick="testDirectApi()">🧪 测试连接</button>
-        ${directApiActive ? `<button class="btn btn-sm btn-danger" style="flex:1;" onclick="clearDirectApi()">清除 Key</button>` : ''}
-      </div>
-    </div>
+    <div class="divider"></div>
     <div class="setting-group">
       <h4>外观</h4>
       <div class="setting-item">
@@ -5119,17 +5113,10 @@ function showSettings(msg){
         <label>自动存档（每2分钟）</label>
         <div class="toggle ${settings.autoSave?'on':''}" onclick="this.classList.toggle('on')"></div>
       </div>
-      <div class="setting-item">
-        <label>测试兑换码连接</label>
-        <button class="btn btn-sm btn-ghost" onclick="testAPI()">测试</button>
-      </div>
     </div>
   `,()=>{
     settings.theme=document.getElementById('s_theme').value;
     settings.autoSave=document.querySelector('.toggle')?.classList.contains('on') || true;
-    settings.directApiUrl=(document.getElementById('s_directApiUrl')?.value||'').trim();
-    settings.directApiKey=(document.getElementById('s_directApiKey')?.value||'').trim();
-    settings.directApiModel=(document.getElementById('s_directApiModel')?.value||'').trim();
     myProfile.name=gv('s_name').trim();
     myProfile.gender=document.querySelector('.gender-btns:last-of-type .gender-btn.active')?.textContent||'';
     myProfile.desc=gv('s_desc').trim();
@@ -5138,6 +5125,79 @@ function showSettings(msg){
     applyTheme(settings.theme);
     toast('设置已保存');
   });
+}
+
+// ===== 兑换码子设置弹窗 =====
+function showRedeemSettings(){
+  const redeemActive = !!sessionToken;
+  const sessionInfo = redeemActive
+    ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:14px;">
+        ✅ 已激活会话 · 剩余 <strong style="color:var(--gold)">${sessionRemaining < 0 ? '无限' : sessionRemaining}</strong> 回合
+      </div>`
+    : `<div style="background:rgba(255,100,168,0.08);border:1px solid rgba(255,100,168,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:14px;">
+        ⚠️ 尚未激活兑换码，请输入兑换码后开始游戏
+      </div>`;
+  showModal('🎫 兑换码', `
+    ${sessionInfo}
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button class="btn btn-primary" onclick="closeModal();showRedeemModal()">🎫 输入 / 更换兑换码</button>
+      ${redeemActive ? `<button class="btn btn-ghost" onclick="testAPI()">🧪 测试连接</button>` : ''}
+      ${redeemActive ? `<button class="btn btn-danger btn-sm" onclick="clearSession()">清除当前会话</button>` : ''}
+    </div>
+    <div style="margin-top:16px;font-size:0.75rem;color:var(--text3);line-height:1.6;">
+      兑换码由发码方提供，每张码含固定回合数。用完后需获取新码继续游戏。
+    </div>
+    <div style="margin-top:14px;">
+      <button class="btn btn-ghost btn-sm" style="width:100%;" onclick="closeModal();setTimeout(showSettings,180)">← 返回设置</button>
+    </div>
+  `, null, false);
+}
+
+// ===== 自带 API Key 子设置弹窗 =====
+function showApiSettings(){
+  const directApiActive = useDirectApi();
+  showModal('🔑 API 接入', `
+    <div style="font-size:0.78rem;color:var(--text2);margin-bottom:14px;line-height:1.6;">
+      填入自己的 API Key，直接调用 AI，不消耗兑换码回合数，无限畅玩。支持 OpenAI 及兼容接口。
+    </div>
+    ${directApiActive ? `<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.8rem;margin-bottom:14px;">
+      🔑 已启用 · 模型：<strong style="color:var(--gold)">${esc(settings.directApiModel||'gpt-4o-mini')}</strong> · 无限回合
+    </div>` : ''}
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.82rem;color:var(--text2);margin-bottom:6px;display:block;">API 地址（可选，默认 OpenAI）</label>
+      <input type="text" class="input" id="sa_url" value="${esc(settings.directApiUrl)}" placeholder="https://api.openai.com/v1" style="font-size:0.82rem;">
+      <div style="font-size:0.7rem;color:var(--text3);margin-top:4px;line-height:1.5;">
+        DeepSeek：https://api.deepseek.com/v1<br>
+        Moonshot：https://api.moonshot.cn/v1<br>
+        硅基流动：https://api.siliconflow.cn/v1
+      </div>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.82rem;color:var(--text2);margin-bottom:6px;display:block;">API Key <span style="color:var(--red)">*</span></label>
+      <input type="password" class="input" id="sa_key" value="${esc(settings.directApiKey)}" placeholder="sk-..." style="font-size:0.82rem;">
+    </div>
+    <div style="margin-bottom:16px;">
+      <label style="font-size:0.82rem;color:var(--text2);margin-bottom:6px;display:block;">模型名称（可选）</label>
+      <input type="text" class="input" id="sa_model" value="${esc(settings.directApiModel)}" placeholder="gpt-4o-mini / deepseek-chat / moonshot-v1-8k" style="font-size:0.82rem;">
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <button class="btn btn-primary btn-sm" style="flex:1;" onclick="saveApiSettings()">💾 保存</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1;" onclick="saveApiSettings(true)">🧪 保存并测试</button>
+    </div>
+    ${directApiActive ? `<button class="btn btn-danger btn-sm" style="width:100%;margin-bottom:10px;" onclick="clearDirectApi()">清除 API Key</button>` : ''}
+    <button class="btn btn-ghost btn-sm" style="width:100%;" onclick="closeModal();setTimeout(showSettings,180)">← 返回设置</button>
+  `, null, false);
+}
+
+// 保存 API 设置（可选带测试）
+async function saveApiSettings(doTest){
+  settings.directApiUrl = (document.getElementById('sa_url')?.value||'').trim();
+  settings.directApiKey = (document.getElementById('sa_key')?.value||'').trim();
+  settings.directApiModel = (document.getElementById('sa_model')?.value||'').trim();
+  LS.set('settings', settings);
+  toast('API 设置已保存');
+  if(doTest) await testDirectApi(true);
+  else { closeModal(); setTimeout(showSettings, 180); }
 }
 
 // 清除会话
@@ -5184,12 +5244,12 @@ async function testAPI(){
   }
 }
 
-// 测试自带 API Key 连接
-async function testDirectApi(){
-  // 先保存当前输入框的值
-  const url = (document.getElementById('s_directApiUrl')?.value||'').trim();
-  const key = (document.getElementById('s_directApiKey')?.value||'').trim();
-  const model = (document.getElementById('s_directApiModel')?.value||'').trim() || 'gpt-4o-mini';
+// 测试自带 API Key 连接（fromSave=true 时测完后回到设置主页）
+async function testDirectApi(fromSave){
+  // 优先读取 API 设置弹窗的输入框，否则用已保存的值
+  const url = (document.getElementById('sa_url')?.value || settings.directApiUrl || '').trim();
+  const key = (document.getElementById('sa_key')?.value || settings.directApiKey || '').trim();
+  const model = (document.getElementById('sa_model')?.value || settings.directApiModel || '').trim() || 'gpt-4o-mini';
   if(!key){ toast('请先填写 API Key'); return; }
   toast('测试连接中...');
   try{
@@ -5202,8 +5262,10 @@ async function testDirectApi(){
       body:JSON.stringify({ model, messages:[{role:'user',content:'hi'}], max_tokens:5, temperature:0.5 }),
       signal:AbortSignal.timeout(20000)
     });
-    if(resp.ok){ toast('✅ API Key 连接成功！'); }
-    else{
+    if(resp.ok){
+      toast('✅ API Key 连接成功！');
+      if(fromSave){ closeModal(); setTimeout(showSettings, 300); }
+    } else{
       const data = await resp.json().catch(()=>({}));
       toast('❌ 失败('+resp.status+'): '+(data.error?.message||data.error||'未知错误'));
     }

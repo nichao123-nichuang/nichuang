@@ -6831,15 +6831,15 @@ function initBgCanvas(){
 let checkinStatus = null; // 签到状态缓存
 let checkinCode = null;   // 本次签到获得的兑换码
 
-// 奖励配置
+// 奖励配置 (1-3天:1回合, 4-5天:3回合, 6-7天:5回合)
 const CHECKIN_REWARDS = {
-  1: { rounds: 5, label: '5回合', icon: '🌱' },
-  2: { rounds: 5, label: '5回合', icon: '🌱' },
-  3: { rounds: 10, label: '10回合', icon: '🌿' },
-  4: { rounds: 10, label: '10回合', icon: '🌿' },
-  5: { rounds: 15, label: '15回合', icon: '🌳' },
-  6: { rounds: 15, label: '15回合', icon: '🌳' },
-  7: { rounds: 30, label: '30回合', icon: '👑', special: true }
+  1: { rounds: 1, label: '1回合', icon: '🌱' },
+  2: { rounds: 1, label: '1回合', icon: '🌱' },
+  3: { rounds: 1, label: '1回合', icon: '🌱' },
+  4: { rounds: 3, label: '3回合', icon: '🌿' },
+  5: { rounds: 3, label: '3回合', icon: '🌿' },
+  6: { rounds: 5, label: '5回合', icon: '🌳' },
+  7: { rounds: 5, label: '5回合', icon: '👑', special: true }
 };
 
 // 获取设备ID
@@ -6941,7 +6941,7 @@ async function showCheckinModal() {
   const html = `
     <div class="checkin-header">
       <div class="checkin-title">📅 每日签到</div>
-      <div class="checkin-subtitle">连续签到7天，最高领取30回合！</div>
+      <div class="checkin-subtitle">连续签到7天，最高领取5回合！</div>
     </div>
     
     <div class="checkin-calendar">
@@ -6987,10 +6987,9 @@ async function showCheckinModal() {
       <div style="font-size:0.75rem;color:var(--text2);text-align:center;">
         <div style="margin-bottom:8px;">📋 连续签到规则</div>
         <div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;">
-          <span>1-2天: 5回合</span>
-          <span>3-4天: 10回合</span>
-          <span>5-6天: 15回合</span>
-          <span style="color:var(--gold);">第7天: 30回合</span>
+          <span>1-3天: 1回合</span>
+          <span style="color:var(--gold);">4-5天: 3回合</span>
+          <span style="color:var(--accent);">6-7天: 5回合</span>
         </div>
         <div style="margin-top:8px;font-size:0.7rem;opacity:0.8;">断签后将从第1天重新开始</div>
       </div>
@@ -7020,11 +7019,14 @@ async function doCheckin() {
     const data = await resp.json();
     
     if (data.success) {
-      checkinCode = data.data.code;
-      checkinStatus = data.data.status;
-      
+      checkinCode = data.data.rewardCode;
+      checkinStatus = {
+        consecutiveDays: data.data.consecutiveDays,
+        lastCheckin: new Date().toISOString()
+      };
+
       // 显示成功，重新渲染弹窗
-      showToast(`🎉 签到成功！获得 ${data.data.rounds} 回合`);
+      showToast(`🎉 签到成功！获得 ${data.data.rewardTurns} 回合`);
       showCheckinModal();
       
       // 更新首页卡片
